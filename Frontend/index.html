@@ -3,173 +3,112 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CampusPath - VIT Pune Navigation</title>
-    
-    <!-- Mapbox GL JS -->
-    <script src='https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js'></script>
-    <link href='https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css' rel='stylesheet' />
-    
-    <!-- Google Fonts & Icons -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <!-- Custom CSS -->
-    <link rel="stylesheet" href="style.css">
+    <title>CampusPath 3D - AIML Building</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #ui-panel {
+            position: absolute; top: 20px; left: 20px; background: rgba(255,255,255,0.95); 
+            padding: 20px; border-radius: 8px; z-index: 1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            font-family: sans-serif; width: 280px;
+        }
+        button { background: #0078FF; color: white; border: none; padding: 10px; width: 100%; border-radius: 5px; margin-top: 15px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        label { font-size: 0.9rem; font-weight: bold; color: #444; }
+    </style>
 </head>
 <body>
-    <!-- Map Container -->
+    <div id="ui-panel">
+        <h3 style="margin-top:0;">CampusPath Navigator</h3>
+        <label>Destination:</label>
+        <select style="width:100%; margin: 8px 0 15px 0; padding: 5px;"><option>Room 4309 (AIML)</option></select>
+        <label style="display:block; margin-bottom:8px;"><input type="checkbox" checked> Rain-Free Path</label>
+        <label style="display:block;"><input type="checkbox"> Avoid Crowds</label>
+        <button onclick="alert('Phase 2 Integration Pending: Backend Dijkstra Routing')">Find Path</button>
+    </div>
     <div id="map"></div>
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1Ijoic2FuNDA0MGciLCJhIjoiY211bjFrY2l0MDV6bTJ6czl3Nzg5ZjU4cyJ9.XVEgOWjAR3DDXyhynLPBng'; // ENSURE TOKEN IS HERE
 
-    <!-- AIML 3D model controls -->
-    <section id="aiml-controls" class="aiml-controls">
-        <div class="aiml-controls-heading">
-            <strong><i class="fa-solid fa-cube"></i> AIML Building 4</strong>
-            <button type="button" id="aiml-toggle" class="aiml-small-button">Show 3D</button>
-        </div>
-        <div class="aiml-control-row">
-            <label for="aiml-floor">Indoor floor</label>
-            <select id="aiml-floor">
-                <option value="all">Whole building</option>
-                <option value="G">Ground</option>
-                <option value="1">First</option>
-                <option value="2">Second</option>
-                <option value="3">Third</option>
-            </select>
-        </div>
-        <div class="aiml-control-row">
-            <label><input type="checkbox" id="aiml-roof" checked> Show roof</label>
-        </div>
-        <div class="aiml-control-row">
-            <label for="aiml-rotation">Rotation</label>
-            <input id="aiml-rotation" type="range" min="-180" max="180" value="0" step="1">
-            <output id="aiml-rotation-value">0°</output>
-        </div>
-        <div class="aiml-control-row">
-            <label for="aiml-scale">Scale</label>
-            <input id="aiml-scale" type="range" min="0.5" max="2" value="1" step="0.05">
-            <output id="aiml-scale-value">1.00×</output>
-        </div>
-        <button type="button" id="aiml-place" class="aiml-calibrate-button">Calibrate position on map</button>
-        <small id="aiml-status">Initial position is approximate. Calibrate by clicking the building centre on the map.</small>
-    </section>
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/light-v11',
+            center: [73.867831, 18.463496], 
+            zoom: 18.5,
+            pitch: 65,
+            bearing: -20,
+            antialias: true
+        });
 
-    <!-- UI Panel (Glassmorphism) -->
-    <div class="glass-panel slide-in-left">
-        <div class="header-logo">
-            <i class="fa-solid fa-map-location-dot"></i>
-            <div>
-                <h1>CampusPath</h1>
-                <p>Smart Routing for VIT Pune</p>
-            </div>
-        </div>
-        
-        <form id="routing-form">
-            <div class="form-group">
-                <label for="start"><i class="fa-solid fa-location-crosshairs"></i> Start Location</label>
-                <select id="start" name="start">
-                    <option value="MainGate">Main Gate</option>
-                    <option value="CS_DESH">CS/DESH Building</option>
-                    <option value="AI_AIDS_Mech">AI/AIDS/Mechanical Building</option>
-                    <option value="AIML">AIML Building</option>
-                    <option value="MainCanteen">Main Canteen</option>
-                    <option value="Nescafe">Nescafe Canteen</option>
-                    <option value="StaffCanteen">Staff Canteen</option>
-                    <option value="FruitCanteen">Fruit Canteen</option>
-                    <option value="PuneBakery">Pune Bakery</option>
-                    <option value="ParathaHouse">Paratha House</option>
-                    <option value="Parking">VIT Parking Area</option>
-                    <option value="Auditorium">Auditorium</option>
-                    <option value="CustomMapPoint" disabled hidden>📍 Custom Map Click</option>
-                </select>
-            </div>
+        // Final Hardcoded Alignment Values
+        const cSx = 1.488;  // Final Scale X
+        const cSy = 1.533;  // Final Scale Y
+        const cSz = 1.232;  // Final Scale Z
+        const cX = 0.00006; // Final Move X
+        const cY = 0.00031; // Final Move Y
+        const cAlt = 0;
+        const cRx = 0.01;
+        const cRy = 0; 
+        const cRz = 3.14; 
+        const baseLng = 73.867831;
+        const baseLat = 18.463496;
 
-            <div class="form-group">
-                <label for="end"><i class="fa-solid fa-location-dot"></i> Destination</label>
-                <select id="end" name="end">
-                    <option value="AIML">AIML Building</option>
-                    <option value="CS_DESH">CS/DESH Building</option>
-                    <option value="AI_AIDS_Mech">AI/AIDS/Mechanical Building</option>
-                    <option value="MainCanteen">Main Canteen</option>
-                    <option value="Nescafe">Nescafe Canteen</option>
-                    <option value="StaffCanteen">Staff Canteen</option>
-                    <option value="FruitCanteen">Fruit Canteen</option>
-                    <option value="PuneBakery">Pune Bakery</option>
-                    <option value="ParathaHouse">Paratha House</option>
-                    <option value="Parking">VIT Parking Area</option>
-                    <option value="Auditorium">Auditorium</option>
-                    <option value="MainGate">Main Gate</option>
-                    <option value="CustomMapPoint" disabled hidden>📍 Custom Map Click</option>
-                </select>
-            </div>
+        const customLayer = {
+            id: '3d-model',
+            type: 'custom',
+            renderingMode: '3d',
+            onAdd: function (map, gl) {
+                this.camera = new THREE.Camera();
+                this.scene = new THREE.Scene();
+                const directionalLight = new THREE.DirectionalLight(0xffffff);
+                directionalLight.position.set(0, -70, 100).normalize();
+                this.scene.add(directionalLight);
+                const ambientLight = new THREE.AmbientLight(0x404040, 3);
+                this.scene.add(ambientLight);
 
-            <!-- Dynamic Room Number Field (Hidden by default) -->
-            <div class="form-group" id="room-number-group" style="display: none;">
-                <label for="roomNumber"><i class="fa-solid fa-door-open"></i> Room Number</label>
-                <input type="text" id="roomNumber" name="roomNumber" placeholder="e.g. 4301 (Optional)">
-            </div>
+                const loader = new THREE.GLTFLoader();
+                loader.load('assets/AIML_Building4_Standalone.glb', (gltf) => {
+                    this.scene.add(gltf.scene);
+                });
 
-            <div class="form-group checkbox-group">
-                <input type="checkbox" id="rainFree" name="rainFree">
-                <label for="rainFree">Find Rain-Free Route <i class="fa-solid fa-umbrella"></i></label>
-            </div>
+                this.map = map;
+                this.renderer = new THREE.WebGLRenderer({
+                    canvas: map.getCanvas(),
+                    context: gl,
+                    antialias: true
+                });
+                this.renderer.autoClear = false;
+            },
+            render: function (gl, matrix) {
+                const modelAsMercatorCoordinate = mapboxgl.MercatorCoordinate.fromLngLat([baseLng + cX, baseLat + cY], cAlt);
+                const rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), cRx);
+                const rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 1, 0), cRy);
+                const rotationZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 0, 1), cRz);
+                const m = new THREE.Matrix4().fromArray(matrix);
+                const l = new THREE.Matrix4()
+                    .makeTranslation(modelAsMercatorCoordinate.x, modelAsMercatorCoordinate.y, modelAsMercatorCoordinate.z)
+                    .scale(new THREE.Vector3(
+                        modelAsMercatorCoordinate.meterInMercatorCoordinateUnits() * cSx,
+                        -modelAsMercatorCoordinate.meterInMercatorCoordinateUnits() * cSy,
+                        modelAsMercatorCoordinate.meterInMercatorCoordinateUnits() * cSz
+                    ))
+                    .multiply(rotationX)
+                    .multiply(rotationY)
+                    .multiply(rotationZ);
+                this.camera.projectionMatrix = m.multiply(l);
+                this.renderer.resetState();
+                this.renderer.render(this.scene, this.camera);
+                this.map.triggerRepaint();
+            }
+        };
 
-            <div class="form-group">
-                <label for="time"><i class="fa-regular fa-clock"></i> Current Time (Crowd Avoidance)</label>
-                <input type="time" id="time" name="time" value="13:00">
-            </div>
-
-            <button type="submit" id="find-path-btn">
-                <span>Find Smart Path</span>
-                <i class="fa-solid fa-arrow-right"></i>
-            </button>
-        </form>
-    </div>
-
-    <!-- Route Details Card (Hidden initially) -->
-    <div id="route-details" class="glass-card hidden">
-        
-        <!-- Screen 1: Outdoor Route -->
-        <div id="outdoor-step-view">
-            <div class="route-header">
-                <h3><i class="fa-solid fa-route"></i> Route Found!</h3>
-                <span id="route-time">5 mins walk</span>
-            </div>
-            <div class="route-steps">
-                <div class="step">
-                    <div class="step-icon"><i class="fa-solid fa-person-walking"></i></div>
-                    <div class="step-text" id="outdoor-instruction">Walk to Destination</div>
-                </div>
-            </div>
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button id="btn-arrived" style="display: none; background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">I've Arrived <i class="fa-solid fa-building-circle-check"></i></button>
-                <button id="close-details">Close</button>
-            </div>
-        </div>
-
-        <!-- Screen 2: Detailed Indoor Route -->
-        <div id="indoor-step-view" style="display: none;">
-            <div class="route-header">
-                <h3 style="color: #11998e;"><i class="fa-solid fa-map-pin"></i> Indoor Navigation</h3>
-            </div>
-            <div class="indoor-big-text">
-                <h2 id="indoor-room-title">Room</h2>
-                <ul class="indoor-instructions-list" id="indoor-instructions-list">
-                    <!-- Dynamic List Items Go Here -->
-                </ul>
-            </div>
-            <button id="finish-route" style="margin-top: 20px; background: #1a1a1a;">Finish Route <i class="fa-solid fa-flag-checkered"></i></button>
-        </div>
-
-    </div>
-
-    <!-- Three.js for the standalone AIML GLB Mapbox custom layer -->
-    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-
-    <!-- AIML 3D model integration (kept separate from the existing routing code) -->
-    <script src="aiml-model.js"></script>
-
-    <!-- Existing CampusPath JavaScript -->
-    <script src="app.js"></script>
+        map.on('style.load', () => {
+            map.addLayer(customLayer);
+        });
+    </script>
 </body>
 </html>
