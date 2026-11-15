@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CampusPath - VIT Pune Navigation</title>
+    
+    <!-- Mapbox GL JS -->
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css' rel='stylesheet' />
+    
+    <!-- Google Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- AIML 3D model controls -->
+    <section id="aiml-controls" class="aiml-controls">
+        <div class="aiml-controls-heading">
+            <strong><i class="fa-solid fa-cube"></i> AIML Building 4</strong>
+            <button type="button" id="aiml-toggle" class="aiml-small-button">Show 3D</button>
+        </div>
+        <div class="aiml-control-row">
+            <label for="aiml-floor">Indoor floor</label>
+            <select id="aiml-floor">
+                <option value="all">Whole building</option>
+                <option value="G">Ground</option>
+                <option value="1">First</option>
+                <option value="2">Second</option>
+                <option value="3">Third</option>
+            </select>
+        </div>
+        <div class="aiml-control-row">
+            <label><input type="checkbox" id="aiml-roof" checked> Show roof</label>
+        </div>
+        <div class="aiml-control-row">
+            <label for="aiml-rotation">Rotation</label>
+            <input id="aiml-rotation" type="range" min="-180" max="180" value="0" step="1">
+            <output id="aiml-rotation-value">0°</output>
+        </div>
+        <div class="aiml-control-row">
+            <label for="aiml-scale">Scale</label>
+            <input id="aiml-scale" type="range" min="0.5" max="2" value="1" step="0.05">
+            <output id="aiml-scale-value">1.00×</output>
+        </div>
+        <button type="button" id="aiml-place" class="aiml-calibrate-button">Calibrate position on map</button>
+        <small id="aiml-status">Initial position is approximate. Calibrate by clicking the building centre on the map.</small>
+    </section>
+
+    <!-- UI Panel (Glassmorphism) -->
+    <div class="glass-panel slide-in-left">
+        <div class="header-logo">
+            <i class="fa-solid fa-map-location-dot"></i>
+            <div>
+                <h1>CampusPath</h1>
+                <p>Smart Routing for VIT Pune</p>
+            </div>
+        </div>
+        
+        <form id="routing-form">
+            <div class="form-group">
+                <label for="start"><i class="fa-solid fa-location-crosshairs"></i> Start Location</label>
+                <select id="start" name="start">
+                    <option value="MainGate">Main Gate</option>
+                    <option value="CS_DESH">CS/DESH Building</option>
+                    <option value="AI_AIDS_Mech">AI/AIDS/Mechanical Building</option>
+                    <option value="AIML">AIML Building</option>
+                    <option value="MainCanteen">Main Canteen</option>
+                    <option value="Nescafe">Nescafe Canteen</option>
+                    <option value="StaffCanteen">Staff Canteen</option>
+                    <option value="FruitCanteen">Fruit Canteen</option>
+                    <option value="PuneBakery">Pune Bakery</option>
+                    <option value="ParathaHouse">Paratha House</option>
+                    <option value="Parking">VIT Parking Area</option>
+                    <option value="Auditorium">Auditorium</option>
+                    <option value="CustomMapPoint" disabled hidden>📍 Custom Map Click</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="end"><i class="fa-solid fa-location-dot"></i> Destination</label>
+                <select id="end" name="end">
+                    <option value="AIML">AIML Building</option>
+                    <option value="CS_DESH">CS/DESH Building</option>
+                    <option value="AI_AIDS_Mech">AI/AIDS/Mechanical Building</option>
+                    <option value="MainCanteen">Main Canteen</option>
+                    <option value="Nescafe">Nescafe Canteen</option>
+                    <option value="StaffCanteen">Staff Canteen</option>
+                    <option value="FruitCanteen">Fruit Canteen</option>
+                    <option value="PuneBakery">Pune Bakery</option>
+                    <option value="ParathaHouse">Paratha House</option>
+                    <option value="Parking">VIT Parking Area</option>
+                    <option value="Auditorium">Auditorium</option>
+                    <option value="MainGate">Main Gate</option>
+                    <option value="CustomMapPoint" disabled hidden>📍 Custom Map Click</option>
+                </select>
+            </div>
+
+            <!-- Dynamic Room Number Field (Hidden by default) -->
+            <div class="form-group" id="room-number-group" style="display: none;">
+                <label for="roomNumber"><i class="fa-solid fa-door-open"></i> Room Number</label>
+                <input type="text" id="roomNumber" name="roomNumber" placeholder="e.g. 4301 (Optional)">
+            </div>
+
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="rainFree" name="rainFree">
+                <label for="rainFree">Find Rain-Free Route <i class="fa-solid fa-umbrella"></i></label>
+            </div>
+
+            <div class="form-group">
+                <label for="time"><i class="fa-regular fa-clock"></i> Current Time (Crowd Avoidance)</label>
+                <input type="time" id="time" name="time" value="13:00">
+            </div>
+
+            <button type="submit" id="find-path-btn">
+                <span>Find Smart Path</span>
+                <i class="fa-solid fa-arrow-right"></i>
+            </button>
+        </form>
+    </div>
+
+    <!-- Route Details Card (Hidden initially) -->
+    <div id="route-details" class="glass-card hidden">
+        
+        <!-- Screen 1: Outdoor Route -->
+        <div id="outdoor-step-view">
+            <div class="route-header">
+                <h3><i class="fa-solid fa-route"></i> Route Found!</h3>
+                <span id="route-time">5 mins walk</span>
+            </div>
+            <div class="route-steps">
+                <div class="step">
+                    <div class="step-icon"><i class="fa-solid fa-person-walking"></i></div>
+                    <div class="step-text" id="outdoor-instruction">Walk to Destination</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button id="btn-arrived" style="display: none; background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">I've Arrived <i class="fa-solid fa-building-circle-check"></i></button>
+                <button id="close-details">Close</button>
+            </div>
+        </div>
+
+        <!-- Screen 2: Detailed Indoor Route -->
+        <div id="indoor-step-view" style="display: none;">
+            <div class="route-header">
+                <h3 style="color: #11998e;"><i class="fa-solid fa-map-pin"></i> Indoor Navigation</h3>
+            </div>
+            <div class="indoor-big-text">
+                <h2 id="indoor-room-title">Room</h2>
+                <ul class="indoor-instructions-list" id="indoor-instructions-list">
+                    <!-- Dynamic List Items Go Here -->
+                </ul>
+            </div>
+            <button id="finish-route" style="margin-top: 20px; background: #1a1a1a;">Finish Route <i class="fa-solid fa-flag-checkered"></i></button>
+        </div>
+
+    </div>
+
+    <!-- Three.js for the standalone AIML GLB Mapbox custom layer -->
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <!-- AIML 3D model integration (kept separate from the existing routing code) -->
+    <script src="aiml-model.js"></script>
+
+    <!-- Existing CampusPath JavaScript -->
+    <script src="app.js"></script>
+</body>
+</html>
