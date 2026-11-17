@@ -656,7 +656,7 @@
   // Stand a sign upright on a wall, text facing the corridor. facing: 'west' | 'north' | 'south'
   // (the direction a person reading it looks from = the sign's normal).
   function mountSign(sign, facing) {
-    const rz = { south: 0, north: Math.PI, west: -Math.PI / 2 }[facing];
+    const rz = { south: 0, north: Math.PI, west: -Math.PI / 2, east: Math.PI / 2 }[facing];
     sign.rotation.set(Math.PI / 2, 0, rz, 'ZYX');
     return sign;
   }
@@ -769,6 +769,12 @@
         s.position.set(x, -0.06, z + 2.45);
         g.add(s);
       });
+      if (f === 0) { // Ladies' WC on the short arm's far end wall
+        box(g, MAT.door, westX, westX + 0.03, -corner - 0.5, -corner + 0.5, z, z + 2.1);
+        const s = mountSign(makeSign("LADIES' WC"), 'east');
+        s.position.set(westX + 0.06, -corner, z + 2.45);
+        g.add(s);
+      }
       if ((F.endWall || []).length) {
         box(g, MAT.steel, cx - 0.4, cx + 0.4, -0.55, -0.02, z, z + 1.1);          // water cooler
         const w = mountSign(makeSign('Drinking Water'), 'south');
