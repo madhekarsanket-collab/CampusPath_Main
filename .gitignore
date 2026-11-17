@@ -13,3 +13,6 @@ Frontend/android/app/src/main/assets/capacitor.config.json
 # Large / local-only files
 CampusMain.zip
 docs/debug-screenshots/
+
+# Built app for sharing (rebuild with Gradle)
+release/
