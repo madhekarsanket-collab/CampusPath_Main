@@ -1,0 +1,596 @@
+// ==========================================
+// 1. CONFIGURATION & STATE
+// ==========================================
+mapboxgl.accessToken = 'pk.eyJ1Ijoic2FuNDA0MGciLCJhIjoiY211bjFrY2l0MDV6bTJ6czl3Nzg5ZjU4cyJ9.XVEgOWjAR3DDXyhynLPBng';
+
+// Backend endpoint. Desktop: localhost. Phone: needs `adb reverse tcp:8080 tcp:8080`
+// (or change to the laptop's LAN IP / a hosted URL).
+const API_BASE = 'http://localhost:8080';
+const BACKEND_URL = `${API_BASE}/api/route`;
+
+// AIML rooms = backend node ids (Backend AimlIndoorGraph). Same layout on every floor.
+const AIML_ROOMS = [
+  ['4003', '4003 – Liquid Galaxy Lab (Ground)'], ['4004', '4004 (Ground)'], ['4005', '4005 (Ground)'],
+  ['4006', '4006 (Ground)'], ['4007', '4007 (Ground)'], ['4008', '4008 (Ground)'], ['AIML_OFFICE', 'AIML Office (Ground)'],
+  ['AIML_COE_AI', 'Center of Excellence in AI (Ground)'],
+  ...[1, 2, 3].flatMap(f => ['04', '05', '06', '07', '08', '09'].map(r => [`4${f}${r}`, `${4}${f}${r} (Floor ${f})`])),
+  ['AIML_HOD_OFFICE', 'HOD Office (Floor 3)'],
+];
+const AIML_ENTRANCES = { AIML_E1: [73.867780, 18.463487], AIML_E2: [73.867834, 18.463828] };
+const AIML_OSM_BUILDING_ID = 223964767; // Mapbox building feature id of the real AIML block
+const XRAY_DISTANCE_M = 30;   // switch to see-through view this close to an entrance
+const WALK_SPEED_MPS = 1.4;
+const SIM_SPEEDUP = 4;
+
+let startCoords = null, endCoords = null;   // [lng, lat] when pinned / GPS
+let startMarker = null, endMarker = null;
+let clickCount = 0;
+let route = null;            // { coords, floors, nodeIds, props }
+let progressIdx = 0;         // index of the route vertex the user has reached
+let userMarker = null, gpsWatchId = null, simTimer = null, xrayOn = false;
+let userPos = null, userFloor = null; // walker's exact position while navigating
+
+const startSelect = document.getElementById('start-select');
+const endSelect = document.getElementById('end-select');
+const findPathBtn = document.getElementById('find-path-btn');
+const navStartBtn = document.getElementById('nav-start-btn');
+const navSimBtn = document.getElementById('nav-sim-btn');
+const banner = document.getElementById('nav-banner');
+const chkRain = document.getElementById('chk-rain');
+
+document.getElementById('aiml-rooms').innerHTML =
+  AIML_ROOMS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
+
+// ==========================================
+// 2. MAP INITIALIZATION & 3D BUILDINGS
+// ==========================================
+const map = new mapboxgl.Map({
+  container: 'map',
+  style: 'mapbox://styles/mapbox/streets-v12',
+  center: [73.8682, 18.4635],
+  zoom: 17.2,
+  pitch: 50,
+  bearing: -15,
+  maxZoom: 24, // the indoor follow camera sits ~5 m behind the walker; default max (22) keeps it ~20 m away
+  antialias: true
+});
+window.map = map;
+
+map.on('load', () => {
+  const layers = map.getStyle().layers;
+  const labelLayerId = layers.find(l => l.type === 'symbol' && l.layout && l.layout['text-field'])?.id;
+
+  map.addLayer({
+    id: '3d-buildings',
+    source: 'composite',
+    'source-layer': 'building',
+    // Hide Mapbox's own grey AIML block: it overlaps our model and z-fights (flickers).
+    filter: ['all', ['==', ['get', 'extrude'], 'true'], ['!=', ['id'], AIML_OSM_BUILDING_ID]],
+    type: 'fill-extrusion',
+    minzoom: 15,
+    paint: {
+      'fill-extrusion-color': '#aaa',
+      'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['get', 'height']],
+      'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['get', 'min_height']],
+      'fill-extrusion-opacity': 0.6
+    }
+  }, labelLayerId);
+
+  window.CampusPathAIML?.initLayer?.(map);
+  window.CampusPathAIML?.loadInterior?.(API_BASE);
+  loadWeather();
+  initCrowdLayer();
+});
+
+// ==========================================
+// 3. MAP CLICK & DUAL-INPUT LOGIC
+// ==========================================
+map.on('click', (e) => {
+  if (window.aimlPlacementMode) return; // AIML anchor calibration in progress
+  const coords = [e.lngLat.lng, e.lngLat.lat];
+  clickCount++;
+  if (clickCount === 1) setStartLocation(coords, true);
+  else if (clickCount === 2) setEndLocation(coords, true);
+  else resetNavigation();
+});
+
+startSelect.addEventListener('change', () => {
+  if (startSelect.value !== 'gps') return;
+  if (!navigator.geolocation) return alert('Location is not available on this device.');
+  navigator.geolocation.getCurrentPosition(
+    p => setStartLocation([p.coords.longitude, p.coords.latitude], false),
+    err => alert('Could not get your location: ' + err.message),
+    { enableHighAccuracy: true, timeout: 10000 });
+});
+
+function setStartLocation(coords, isPinned) {
+  startCoords = coords;
+  startMarker?.remove();
+  startMarker = new mapboxgl.Marker({ color: '#10b981' }).setLngLat(coords).addTo(map);
+  if (isPinned) startSelect.value = 'pinned';
+}
+
+function setEndLocation(coords, isPinned) {
+  endCoords = coords;
+  endMarker?.remove();
+  endMarker = new mapboxgl.Marker({ color: '#ef4444' }).setLngLat(coords).addTo(map);
+  if (isPinned) endSelect.value = 'pinned';
+}
+
+function resetNavigation() {
+  stopNavigation();
+  clickCount = 0;
+  startCoords = endCoords = null;
+  startMarker?.remove(); startMarker = null;
+  endMarker?.remove(); endMarker = null;
+  startSelect.selectedIndex = 0;
+  endSelect.selectedIndex = 0;
+  route = null;
+  clearRouteLayer();
+  window.CampusPathAIML?.clearIndoorRoute?.();
+  setXray(false);
+  banner.textContent = '';
+  navStartBtn.disabled = navSimBtn.disabled = true;
+}
+
+function clearRouteLayer() {
+  if (map.getLayer('route-line')) map.removeLayer('route-line');
+  if (map.getSource('route-source')) map.removeSource('route-source');
+}
+
+// ==========================================
+// 4. WEATHER (live rain detection)
+// ==========================================
+async function loadWeather() {
+  const info = document.getElementById('weather-info');
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast?latitude=18.4635&longitude=73.8682'
+      + '&current=temperature_2m,precipitation,weather_code';
+    const cur = (await (await fetch(url)).json()).current;
+    // WMO codes: 51-67 drizzle/rain, 80-82 showers, 95-99 thunderstorm
+    const code = cur.weather_code;
+    const raining = cur.precipitation > 0 || (code >= 51 && code <= 67) || (code >= 80 && code <= 99);
+    chkRain.checked = raining;
+    info.textContent = `${raining ? '🌧️ Raining now — rain-free path on' : '☀️ No rain now'} · ${cur.temperature_2m}°C`;
+  } catch {
+    info.textContent = 'Weather unavailable (offline). Toggle rain-free path manually.';
+  }
+}
+
+// ==========================================
+// 5. BACKEND FETCH & ROUTE RENDERING
+// ==========================================
+const isPlace = v => v && v !== 'pinned' && v !== 'gps';
+
+findPathBtn.addEventListener('click', async () => {
+  const payload = {
+    rain: chkRain.checked,
+    avoidCrowds: true, // always: nobody wants the crowded way
+    time: (() => { const d = new Date(); return String(d.getHours() * 100 + d.getMinutes()).padStart(4, '0'); })()
+  };
+  if (isPlace(startSelect.value)) payload.startNode = startSelect.value;
+  else if (startCoords) payload.start = { lng: startCoords[0], lat: startCoords[1] };
+  if (isPlace(endSelect.value)) payload.endNode = endSelect.value;
+  else if (endCoords) payload.end = { lng: endCoords[0], lat: endCoords[1] };
+
+  if (!(payload.startNode || payload.start) || !(payload.endNode || payload.end)) {
+    alert('Choose a start and a destination (dropdowns, GPS, or tap the map).');
+    return;
+  }
+
+  try {
+    const response = await fetch(BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server returned HTTP ${response.status}: ${errorText || response.statusText}`);
+    }
+    const data = await response.json();
+    stopNavigation();
+    setXray(false);
+    route = {
+      coords: data.geometry.coordinates,
+      floors: data.properties.floors || data.geometry.coordinates.map(() => null),
+      nodeIds: data.properties.nodeIds || [],
+      props: data.properties
+    };
+    progressIdx = 0;
+    renderRoute();
+    fitRoute();
+    banner.textContent = describeRoute();
+    navStartBtn.disabled = navSimBtn.disabled = false;
+  } catch (error) {
+    console.error('Routing request failed:', error);
+    alert(`Failed to find route: ${error.message}\n\nMake sure the Spring Boot server is running on port 8080 (and ADB reverse is set up on a phone).`);
+  }
+});
+
+// Draws everything from progressIdx onward: the walked part disappears, like Google Maps.
+function renderRoute() {
+  if (!route) return;
+  const { coords, floors } = route;
+  const firstIndoor = floors.findIndex(f => f !== null && f !== undefined);
+  const outdoorEnd = firstIndoor < 0 ? coords.length : firstIndoor; // entrance node is last outdoor point
+  // Start the line exactly at the walker, so nothing behind them stays drawn.
+  const tracking = userPos && route.navigating;
+  const outdoor = tracking
+    ? (progressIdx < outdoorEnd - 1 ? [userPos, ...coords.slice(progressIdx + 1, outdoorEnd)] : [])
+    : coords.slice(0, outdoorEnd);
+
+  const feature = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: outdoor.length >= 2 ? outdoor : [] } };
+  if (map.getSource('route-source')) {
+    map.getSource('route-source').setData(feature);
+  } else {
+    map.addSource('route-source', { type: 'geojson', data: feature });
+    map.addLayer({
+      id: 'route-line', type: 'line', source: 'route-source',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#2563eb', 'line-width': 6, 'line-opacity': 0.85 }
+    });
+  }
+
+  if (firstIndoor >= 0) {
+    const from = Math.max(tracking ? progressIdx : 0, firstIndoor - 1);
+    const c = coords.slice(from), f = floors.slice(from);
+    if (tracking && progressIdx >= firstIndoor - 1) { c[0] = userPos; f[0] = userFloor; }
+    window.CampusPathAIML?.setIndoorRoute?.(c, f);
+  } else {
+    window.CampusPathAIML?.clearIndoorRoute?.();
+  }
+}
+
+function fitRoute() {
+  const c = route.coords;
+  const bounds = c.reduce((b, p) => b.extend(p), new mapboxgl.LngLatBounds(c[0], c[0]));
+  map.fitBounds(bounds, { padding: 80, duration: 1000 });
+}
+
+// Short human directions, built from the node ids the backend returns.
+function describeRoute() {
+  const { nodeIds, floors, props } = route;
+  const parts = [`${Math.round(props.distanceMeters)} m · ~${props.estimatedTimeMinutes} min`];
+  if (props.crowdDetour) parts.push('👥 Rerouted around a live crowd');
+  if (chkRain.checked) parts.push(`🌧️ ${props.coveredOutdoorMeters || 0} m of the outdoor walk under tree cover`);
+  const entrance = nodeIds.find(id => id.startsWith('AIML_E'));
+  if (entrance) parts.push(`Enter AIML by ${entrance === 'AIML_E1' ? 'Entrance 1 (corner, near 4006/4007)' : 'Entrance 2 (north gate)'}`);
+  const destFloor = floors[floors.length - 1];
+  if (destFloor > 0) {
+    const viaLift = nodeIds.some(id => id.startsWith('AIML_LIFT'));
+    parts.push(viaLift
+      ? `Take the lift (it stops at the half-landings), then half a flight up to floor ${destFloor}`
+      : `Take the zig-zag stairs up to floor ${destFloor}`);
+  }
+  if (destFloor !== null && destFloor !== undefined) {
+    const name = AIML_ROOMS.find(([id]) => id === props.destination)?.[1] || props.destination;
+    parts.push(`Walk the corridor to ${name} (highlighted green)`);
+  }
+  return parts.join(' → ');
+}
+
+// ==========================================
+// 6. LIVE NAVIGATION (GPS) + SIMULATION
+// ==========================================
+// Distance in metres from p to segment a-b (local flat projection; fine at campus scale).
+function distToSegment(p, a, b) {
+  const mLng = 111320 * Math.cos(a[1] * Math.PI / 180), mLat = 110574;
+  const ax = 0, ay = 0, bx = (b[0] - a[0]) * mLng, by = (b[1] - a[1]) * mLat;
+  const px = (p[0] - a[0]) * mLng, py = (p[1] - a[1]) * mLat;
+  const len2 = bx * bx + by * by;
+  const t = len2 ? Math.max(0, Math.min(1, (px * bx + py * by) / len2)) : 0;
+  return Math.hypot(px - (ax + t * bx), py - (ay + t * by));
+}
+
+function metersBetween(a, b) {
+  const mLat = 110574, mLng = 111320 * Math.cos(a[1] * Math.PI / 180);
+  return Math.hypot((a[0] - b[0]) * mLng, (a[1] - b[1]) * mLat);
+}
+
+// ---- Follow camera (Google-Maps style: behind the walker, facing the way ahead) ----
+let camBearing = null;
+
+function bearingTo(a, b) {
+  const mLng = 111320 * Math.cos(a[1] * Math.PI / 180);
+  return Math.atan2((b[0] - a[0]) * mLng, (b[1] - a[1]) * 110574) * 180 / Math.PI;
+}
+
+function lookAhead(pos) {
+  const c = route.coords;
+  for (let i = progressIdx + 1; i < c.length; i++) {
+    if (metersBetween(pos, c[i]) > 3) return c[i];
+  }
+  return c[c.length - 1];
+}
+
+function followCamera(pos, floor, animate) {
+  const target = bearingTo(pos, lookAhead(pos));
+  if (camBearing === null) camBearing = target;
+  camBearing += ((((target - camBearing) % 360) + 540) % 360 - 180) * (animate ? 1 : 0.15); // smooth turns
+
+  if (floor === null || floor === undefined) {
+    const opts = { center: pos, bearing: camBearing, pitch: 62, zoom: 19.6 };
+    if (animate) map.easeTo({ ...opts, duration: 900, easing: t => t });
+    else map.jumpTo(opts);
+    return;
+  }
+  // Indoors: free camera just behind and above the walker (above the 3.2 m walls), looking
+  // down the corridor ahead.
+  const back = 9, rad = camBearing * Math.PI / 180;
+  const mLng = 111320 * Math.cos(pos[1] * Math.PI / 180);
+  const behind = [pos[0] - Math.sin(rad) * back / mLng, pos[1] - Math.cos(rad) * back / 110574];
+  const cam = map.getFreeCameraOptions();
+  cam.position = mapboxgl.MercatorCoordinate.fromLngLat(behind, window.CampusPathAIML.floorHeight(floor) + 6.5);
+  cam.setPitchBearing(55, camBearing);
+  map.setFreeCameraOptions(cam);
+}
+
+// pos: [lng,lat]; simIdx/simFloor: exact progress from the simulator (GPS can't tell floors).
+function updateUserPosition(pos, simIdx, simFloor) {
+  if (!route) return;
+  if (!userMarker) {
+    const el = document.createElement('div');
+    el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 10px #2563eb;';
+    userMarker = new mapboxgl.Marker({ element: el }).setLngLat(pos).addTo(map);
+  }
+  userMarker.setLngLat(pos);
+
+  if (simIdx !== undefined) {
+    progressIdx = simIdx;
+  } else {
+    // Only move forward: the nearest route *segment* among the next few is the one we're on.
+    let best = progressIdx, bestD = Infinity;
+    for (let i = progressIdx; i < Math.min(route.coords.length - 1, progressIdx + 15); i++) {
+      const d = distToSegment(pos, route.coords[i], route.coords[i + 1]);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    progressIdx = best;
+  }
+  const floor = simFloor !== undefined ? simFloor : route.floors[progressIdx];
+  route.navigating = true;
+  userPos = pos;
+  userFloor = floor ?? null;
+  renderRoute();
+  const inside = floor !== null && floor !== undefined;
+  const nearBuilding = Object.values(AIML_ENTRANCES).some(e => metersBetween(pos, e) < XRAY_DISTANCE_M);
+  if ((nearBuilding || inside) && route.floors.some(f => f !== null && f !== undefined)) {
+    if (!xrayOn) setXray(true);
+  }
+  // Indoors: hide floors above the walker and draw them at floor height instead of on the ground.
+  window.CampusPathAIML?.setMaxFloor?.(inside ? Math.floor(floor) : null);
+  window.CampusPathAIML?.setInteriorFloor?.(inside ? floor : null);
+  updateCheckpointButton();
+  window.CampusPathAIML?.setUserPosition?.(inside ? pos : null, floor);
+  userMarker.getElement().style.display = inside ? 'none' : '';
+  followCamera(pos, inside ? floor : null, simIdx === undefined);
+
+  if (progressIdx >= route.coords.length - 1) {
+    banner.textContent = '✅ You have arrived!';
+    stopNavigation();
+  }
+}
+
+function setXray(on) {
+  xrayOn = on;
+  window.CampusPathAIML?.setXray?.(on);
+  if (!on) {
+    window.CampusPathAIML?.setMaxFloor?.(null);
+    window.CampusPathAIML?.setInteriorFloor?.(null);
+  }
+}
+
+function stopNavigation() {
+  if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId);
+  gpsWatchId = null;
+  clearInterval(simTimer);
+  simTimer = null;
+  stopPedometer();
+}
+
+// ==========================================
+// 7. INDOOR POSITIONING: step counting + checkpoints
+// ==========================================
+// GPS can't see floors and drifts indoors, so once the walker reaches the entrance we
+// stop trusting GPS and advance along the indoor route by counted steps instead.
+const STEP_LENGTH_M = 0.7;
+let indoorMode = false, walkedM = 0, stepCount = 0, cumDist = [];
+const checkpointBtn = document.getElementById('nav-checkpoint-btn');
+const stepInfo = document.getElementById('step-info');
+
+// Walking distance along the route (stairs count their climb too).
+function buildCumDist() {
+  cumDist = [0];
+  for (let i = 1; i < route.coords.length; i++) {
+    const h = metersBetween(route.coords[i - 1], route.coords[i]);
+    const v = ((route.floors[i] ?? 0) - (route.floors[i - 1] ?? 0)) * 3.6;
+    cumDist.push(cumDist[i - 1] + Math.hypot(h, v));
+  }
+}
+
+function positionAtDistance(d) {
+  const c = route.coords, f = route.floors;
+  let i = 0;
+  while (i < c.length - 2 && cumDist[i + 1] < d) i++;
+  const seg = Math.max(cumDist[i + 1] - cumDist[i], 1e-6);
+  const t = Math.min(1, Math.max(0, (d - cumDist[i]) / seg));
+  const pos = [c[i][0] + (c[i + 1][0] - c[i][0]) * t, c[i][1] + (c[i + 1][1] - c[i][1]) * t];
+  const floor = f[i] == null && f[i + 1] == null ? null : (f[i] ?? 0) + ((f[i + 1] ?? 0) - (f[i] ?? 0)) * t;
+  return { pos, floor, idx: t >= 1 ? i + 1 : i };
+}
+
+function advanceIndoor(meters) {
+  walkedM = Math.min(walkedM + meters, cumDist[cumDist.length - 1]);
+  const p = positionAtDistance(walkedM);
+  updateUserPosition(p.pos, p.idx, p.floor);
+  stepInfo.textContent = indoorMode ? `👣 ${stepCount} steps · indoor positioning by step count` : '';
+}
+
+let lastMag = 9.8, lastStepAt = 0, aboveThreshold = false;
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  const mag = Math.hypot(a.x, a.y, a.z);
+  lastMag = 0.75 * lastMag + 0.25 * mag; // low-pass filter
+  const now = performance.now();
+  // A step = the filtered acceleration rising through ~11.3 m/s², at most every 300 ms.
+  if (!aboveThreshold && lastMag > 11.3 && now - lastStepAt > 300) {
+    aboveThreshold = true;
+    lastStepAt = now;
+    stepCount++;
+    advanceIndoor(STEP_LENGTH_M);
+  } else if (aboveThreshold && lastMag < 10.3) {
+    aboveThreshold = false;
+  }
+}
+
+function startPedometer(fromIdx) {
+  if (indoorMode) return;
+  indoorMode = true;
+  buildCumDist();
+  walkedM = cumDist[fromIdx];
+  stepCount = 0;
+  if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId); // GPS useless indoors
+  gpsWatchId = null;
+  window.addEventListener('devicemotion', onMotion);
+  advanceIndoor(0);
+}
+
+function stopPedometer() {
+  indoorMode = false;
+  window.removeEventListener('devicemotion', onMotion);
+  checkpointBtn.hidden = true;
+  stepInfo.textContent = '';
+}
+
+// Desktop testing: press "s" to take a step.
+window.addEventListener('keydown', e => {
+  if (indoorMode && e.key.toLowerCase() === 's' && e.target.tagName !== 'INPUT') { stepCount++; advanceIndoor(STEP_LENGTH_M); }
+});
+
+// Checkpoints: stairs, landings, lift, corridor corner, destination. Tapping one snaps the
+// position there, correcting step-count drift.
+function nextCheckpoint() {
+  if (!route) return null;
+  for (let i = progressIdx + 1; i < route.nodeIds.length; i++) {
+    const id = route.nodeIds[i];
+    const label =
+      id.startsWith('AIML_STAIRS_') ? (route.floors[i] > 0 ? `Floor ${route.floors[i]} (top of stairs)` : 'Foot of the stairs') :
+      id.startsWith('AIML_LANDING_') ? 'Stair landing (lift doors)' :
+      id.startsWith('AIML_LIFT_') ? 'Inside the lift' :
+      /_A40(\.0)?$/.test(id) ? 'Corridor corner' :
+      i === route.nodeIds.length - 1 ? `Destination door` : null;
+    if (label) return { i, label };
+  }
+  return null;
+}
+
+function updateCheckpointButton() {
+  const cp = indoorMode ? nextCheckpoint() : null;
+  checkpointBtn.hidden = !cp;
+  if (cp) checkpointBtn.textContent = `📍 I'm at: ${cp.label}`;
+}
+
+checkpointBtn.addEventListener('click', () => {
+  const cp = nextCheckpoint();
+  if (!cp) return;
+  walkedM = cumDist[cp.i];
+  advanceIndoor(0);
+});
+
+// ==========================================
+// 8. LIVE CROWD (anonymous pings from every navigating phone)
+// ==========================================
+const DEVICE_ID = (() => {
+  try {
+    let id = localStorage.getItem('cp_device_id');
+    if (!id) { id = (crypto.randomUUID?.() || String(Math.random()).slice(2)); localStorage.setItem('cp_device_id', id); }
+    return id;
+  } catch { return String(Math.random()).slice(2); }
+})();
+let lastPingAt = 0;
+
+function pingCrowd(pos) {
+  if (Date.now() - lastPingAt < 10_000) return;
+  lastPingAt = Date.now();
+  fetch(`${API_BASE}/api/crowd/ping`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId: DEVICE_ID, lng: pos[0], lat: pos[1] })
+  }).catch(() => {}); // crowd data is best-effort
+}
+
+function initCrowdLayer() {
+  map.addSource('crowd', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'crowd-dots', type: 'circle', source: 'crowd',
+    paint: { 'circle-radius': 14, 'circle-color': '#ef4444', 'circle-opacity': 0.35, 'circle-blur': 0.6 }
+  });
+  const crowdInfo = document.getElementById('crowd-info');
+  const refresh = async () => {
+    try {
+      const pts = await (await fetch(`${API_BASE}/api/crowd`)).json();
+      crowdInfo.textContent = `👥 Live crowd: ${pts.length} ${pts.length === 1 ? 'phone' : 'phones'} navigating on campus right now`;
+      map.getSource('crowd').setData({
+        type: 'FeatureCollection',
+        features: pts.map(c => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: c } }))
+      });
+    } catch { /* backend offline */ }
+  };
+  refresh();
+  setInterval(refresh, 15_000);
+
+  // Classroom demo with a single phone: clearly labelled test pings (they expire in 2 min).
+  document.getElementById('demo-crowd-btn').addEventListener('click', async () => {
+    const [lng, lat] = AIML_ENTRANCES.AIML_E2;
+    await Promise.all([...Array(6)].map((_, i) => fetch(`${API_BASE}/api/crowd/ping`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: `demo-${i}`, lng: lng + (i % 3) * 0.00002, lat: lat + Math.floor(i / 3) * 0.00002 })
+    }).catch(() => {})));
+    await refresh();
+    banner.textContent = '🧪 6 test phones placed at Entrance 2 for 2 minutes. Press Find Path again to see the route avoid them.';
+  });
+}
+
+navStartBtn.addEventListener('click', () => {
+  if (!navigator.geolocation) return alert('Location is not available on this device.');
+  stopNavigation();
+  camBearing = null;
+  gpsWatchId = navigator.geolocation.watchPosition(
+    p => {
+      const pos = [p.coords.longitude, p.coords.latitude];
+      pingCrowd(pos);
+      if (indoorMode) return; // indoors the step counter drives the position
+      updateUserPosition(pos);
+      // Reached the entrance: hand over from GPS to step counting.
+      const firstIndoor = route.floors.findIndex(f => f !== null && f !== undefined);
+      if (firstIndoor > 0 && progressIdx >= firstIndoor - 1
+          && metersBetween(pos, route.coords[firstIndoor - 1]) < 8) {
+        startPedometer(firstIndoor - 1);
+      }
+    },
+    err => alert('GPS error: ' + err.message),
+    { enableHighAccuracy: true, maximumAge: 2000 });
+});
+
+// Walks the route at SIM_SPEEDUP × walking speed: lets you demo the whole trip on a desktop.
+navSimBtn.addEventListener('click', () => {
+  if (!route) return;
+  stopNavigation();
+  setXray(false);
+  progressIdx = 0;
+  camBearing = null;
+  let seg = 0, t = 0;
+  const tickMs = 100;
+  simTimer = setInterval(() => {
+    const c = route.coords;
+    if (seg >= c.length - 1) { updateUserPosition(c[c.length - 1], c.length - 1); return; }
+    const len = Math.max(metersBetween(c[seg], c[seg + 1]), 0.5);
+    t += (WALK_SPEED_MPS * SIM_SPEEDUP * tickMs / 1000) / len;
+    while (t >= 1 && seg < c.length - 1) { t -= 1; seg++; }
+    if (seg >= c.length - 1) return;
+    const p = [c[seg][0] + (c[seg + 1][0] - c[seg][0]) * t, c[seg][1] + (c[seg + 1][1] - c[seg][1]) * t];
+    const f0 = route.floors[seg], f1 = route.floors[seg + 1];
+    const floor = f0 == null ? f1 == null ? null : 0 : f1 == null ? f0 : f0 + (f1 - f0) * t; // smooth on stairs
+    updateUserPosition(p, seg, floor);
+  }, tickMs);
+});

@@ -7,7 +7,13 @@ import java.util.*;
 
 public class AStar {
 
-    public List<Node> findPath(Node start, Node goal, boolean rain, int time) {
+    public List<Node> findPath(Node start, Node goal, boolean rain, int time, boolean avoidCrowds) {
+        return findPath(start, goal, rain, time, avoidCrowds, n -> 1.0);
+    }
+
+    /** liveCrowd: node -> multiplier from live phone pings (1 = nobody there). */
+    public List<Node> findPath(Node start, Node goal, boolean rain, int time, boolean avoidCrowds,
+                               java.util.function.ToDoubleFunction<Node> liveCrowd) {
         if (start == null || goal == null) return List.of();
 
         Map<Node, Double> gScore = new HashMap<>();
@@ -34,13 +40,15 @@ public class AStar {
             }
 
             closed.add(current);
+            if (current.isVirtual() && current != start) continue; // no pass-through
 
             for (Edge edge : current.getEdges()) {
                 Node neighbor = edge.getTo();
                 if (closed.contains(neighbor)) continue;
 
                 double tentativeG = gScore.getOrDefault(current, Double.POSITIVE_INFINITY)
-                        + dynamicCost(edge, time, rain);
+                        + dynamicCost(edge, time, rain, avoidCrowds)
+                        * (avoidCrowds ? liveCrowd.applyAsDouble(neighbor) : 1.0);
 
                 if (tentativeG < gScore.getOrDefault(neighbor, Double.POSITIVE_INFINITY)) {
                     cameFrom.put(neighbor, current);
@@ -56,11 +64,12 @@ public class AStar {
         return List.of();
     }
 
-    private double dynamicCost(Edge edge, int time, boolean rain) {
+    private double dynamicCost(Edge edge, int time, boolean rain, boolean avoidCrowds) {
         double cost = edge.getDistanceMeters();
 
-        // Base crowd multiplier supplied by graph data.
-        cost *= crowdMultiplierForTime(edge, time);
+        if (avoidCrowds) {
+            cost *= crowdMultiplierForTime(edge, time);
+        }
 
         // Rain strongly discourages uncovered outdoor paths.
         if (rain && !edge.isCovered()) {
@@ -70,17 +79,15 @@ public class AStar {
         return cost;
     }
 
+    // Hotspot edges (multiplier > 1) are fully crowded at lunch/evening peaks,
+    // partly crowded in other college hours, and empty at night.
     private double crowdMultiplierForTime(Edge edge, int time) {
-        // Edge's baseline multiplier is used at all times.
-        // Peak campus hours add an additional factor.
-        double multiplier = edge.getCrowdMultiplier();
-
-        if ((time >= 1200 && time <= 1400) ||
-            (time >= 1700 && time <= 1900)) {
-            multiplier *= 1.35;
-        }
-
-        return multiplier;
+        double extra = edge.getCrowdMultiplier() - 1.0;
+        double occupancy;
+        if ((time >= 1200 && time <= 1400) || (time >= 1700 && time <= 1900)) occupancy = 1.0;
+        else if (time >= 800 && time <= 1800) occupancy = 0.3;
+        else occupancy = 0.0;
+        return 1.0 + extra * occupancy;
     }
 
     private double heuristic(Node a, Node b) {
