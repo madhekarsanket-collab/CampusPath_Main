@@ -477,6 +477,23 @@ function startNavUi() {
   userPos = route.coords[0];
   progressIdx = 0;
   updateNavTop();
+
+  // Starting inside a room: play the same "arriving at the building" shot as an outdoor
+  // start (see-through building from outside, facing the way ahead), then dive into the
+  // corridor follow camera.
+  const f0 = route.floors[0];
+  if (f0 !== null && f0 !== undefined) {
+    setXray(true);
+    window.CampusPathAIML?.setMaxFloor?.(Math.floor(f0));
+    const ahead = route.coords.find(c => metersBetween(c, route.coords[0]) > 3) || route.coords[route.coords.length - 1];
+    camBearing = bearingTo(route.coords[0], ahead);
+    map.flyTo({ center: route.coords[0], zoom: 19.4, pitch: 62, bearing: camBearing, duration: 1800, essential: true });
+    followHoldUntil = Date.now() + 2000;
+    // Hand over to the corridor camera even if the walker hasn't moved yet (real Start, no steps).
+    setTimeout(() => {
+      if (sheet.dataset.state === 'nav' && userPos) followCamera(userPos, userFloor ?? f0, false);
+    }, 2050);
+  }
 }
 
 function showArrived() {
@@ -540,8 +557,10 @@ recenterBtn.addEventListener('click', () => {
   else map.flyTo({ center: [73.8682, 18.4635], zoom: 17.2, pitch: 50, bearing: -15, duration: 1000 });
 });
 
+let followHoldUntil = 0; // an entry fly-in is playing: don't fight it
+
 function followCamera(pos, floor, animate) {
-  if (followPaused) return;
+  if (followPaused || Date.now() < followHoldUntil) return;
   const target = bearingTo(pos, lookAhead(pos));
   if (camBearing === null) camBearing = target;
   camBearing += ((((target - camBearing) % 360) + 540) % 360 - 180) * (animate ? 1 : 0.15); // smooth turns
