@@ -7,8 +7,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.ClassPathResource;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -35,19 +38,53 @@ public class CampusGraphConfig {
     public Graph campusGraph() {
         Graph graph = new Graph();
         ObjectMapper mapper = new ObjectMapper();
-        
-        // Track the coordinates to alias them to building IDs
-        Map<String, String> coordToBuildingId = new HashMap<>();
 
+        InputStream geojsonStream = null;
+        String resolvedSource = null;
+
+        // Try classpath first (packaged jar or target/classes)
         try {
-            File geojsonFile = new File("coordinates.geojson");
-            if (!geojsonFile.exists()) {
-                System.out.println("WARNING: coordinates.geojson not found! Loading fallback nodes.");
-                return loadFallbackGraph();
+            ClassPathResource resource = new ClassPathResource("coordinates.geojson");
+            if (resource.exists()) {
+                geojsonStream = resource.getInputStream();
+                resolvedSource = "classpath:coordinates.geojson";
             }
+        } catch (Exception ignored) {}
 
-            JsonNode root = mapper.readTree(geojsonFile);
+        // Fallback checks for filesystem locations
+        if (geojsonStream == null) {
+            String[] candidatePaths = new String[] {
+                    "coordinates.geojson",
+                    "../coordinates.geojson",
+                    "Backend/src/main/resources/coordinates.geojson",
+                    "src/main/resources/coordinates.geojson"
+            };
+
+            for (String path : candidatePaths) {
+                File file = new File(path);
+                if (file.exists() && file.isFile()) {
+                    try {
+                        geojsonStream = new FileInputStream(file);
+                        resolvedSource = file.getAbsolutePath();
+                        break;
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        if (geojsonStream == null) {
+            throw new IllegalStateException("CRITICAL STARTUP ERROR: Could not locate 'coordinates.geojson' in classpath or working directory hierarchy.");
+        }
+
+        System.out.println("CampusGraphConfig: Successfully loading graph from: " + resolvedSource);
+
+        try (InputStream is = geojsonStream) {
+            JsonNode root = mapper.readTree(is);
             JsonNode features = root.path("features");
+
+            if (!features.isArray() || features.size() == 0) {
+                throw new IllegalStateException("CRITICAL ERROR: 'coordinates.geojson' contains no valid features.");
+            }
 
             // First pass: Generate all generic nodes and edges
             for (JsonNode feature : features) {
@@ -58,7 +95,7 @@ public class CampusGraphConfig {
                 String prevNodeId = null;
                 for (JsonNode coord : coordinates) {
                     String coordStr = "N_" + getCoordStr(coord);
-                    
+
                     double lon = coord.get(0).asDouble();
                     double lat = coord.get(1).asDouble();
 
@@ -76,41 +113,38 @@ public class CampusGraphConfig {
             }
 
             // Second pass: Identify Building Nodes.
-            // You drew a line from the road to the building. One end is an intersection, the other end is a dead-end (the building).
             for (JsonNode feature : features) {
                 String rawBuildingId = feature.path("properties").path("building_id").asText(null);
                 JsonNode coordinates = feature.path("geometry").path("coordinates");
-                
+
                 if (rawBuildingId != null && coordinates.isArray() && coordinates.size() > 0) {
                     String finalId = TAG_TO_ID.getOrDefault(rawBuildingId, rawBuildingId.replaceAll(" ", ""));
-                    
+
                     String firstCoordStr = "N_" + getCoordStr(coordinates.get(0));
                     String lastCoordStr = "N_" + getCoordStr(coordinates.get(coordinates.size() - 1));
-                    
+
                     Node firstNode = graph.getNode(firstCoordStr);
                     Node lastNode = graph.getNode(lastCoordStr);
-                    
-                    // The building is the end of the line that is a dead-end (only 1 connection)
-                    Node buildingNode = lastNode; 
+
+                    Node buildingNode = lastNode;
                     if (firstNode != null && firstNode.getEdges().size() == 1) {
                         buildingNode = firstNode;
                     } else if (lastNode != null && lastNode.getEdges().size() == 1) {
                         buildingNode = lastNode;
                     }
 
-                    // Create an ALIAS node for the building that sits at the exact same spot
                     if (graph.getNode(finalId) == null) {
-                        graph.addNode(new Node(finalId, buildingNode.getLongitude(), buildingNode.getLatitude()));
+                        Node b = new Node(finalId, buildingNode.getLongitude(), buildingNode.getLatitude());
+                        b.markVirtual();
+                        graph.addNode(b);
                         graph.addBidirectionalEdge(finalId, buildingNode.getId(), 0.1, false, 1.0);
                     } else {
-                        // If there are multiple entrances (like CS_DESH has 2 lines), link the second entrance to the same building node!
                         graph.addBidirectionalEdge(finalId, buildingNode.getId(), 0.1, false, 1.0);
                     }
                 }
             }
 
-            // Third pass: Auto-snap nodes! If the geojson export had floating point rounding, 
-            // the nodes might not match exactly. We link any nodes that are within 3 meters.
+            // Third pass: Auto-snap nodes within 3 meters
             java.util.List<Node> allNodes = new java.util.ArrayList<>(graph.getNodes());
             for (int i = 0; i < allNodes.size(); i++) {
                 for (int j = i + 1; j < allNodes.size(); j++) {
@@ -118,7 +152,6 @@ public class CampusGraphConfig {
                     Node n2 = allNodes.get(j);
                     double dist = Haversine.distance(n1.getLatitude(), n1.getLongitude(), n2.getLatitude(), n2.getLongitude());
                     if (dist < 3.0) {
-                        // Prevent duplicate edges
                         boolean exists = n1.getEdges().stream().anyMatch(e -> e.getTo().equals(n2));
                         if (!exists) {
                             graph.addBidirectionalEdge(n1.getId(), n2.getId(), dist, false, 1.0);
@@ -126,19 +159,57 @@ public class CampusGraphConfig {
                     }
                 }
             }
-            
-            // Because you didn't tag MainGate, ExitGate, or Parking in the geojson.io, 
-            // I will manually inject them here and connect them to the nearest road!
+
+            // Digitising gaps: a path that dead-ends within 12 m of another path almost always
+            // meant to join it (e.g. the AIML Entrance 2 stub stopped 8 m short of the road).
+            for (Node n : allNodes) {
+                if (n.getEdges().size() != 1 || n.isVirtual()) continue;
+                Node best = null;
+                double bestD = 12.0;
+                for (Node m : allNodes) {
+                    if (m == n || m.isVirtual() || n.getEdges().stream().anyMatch(e -> e.getTo() == m)) continue;
+                    double d = Haversine.distance(n.getLatitude(), n.getLongitude(), m.getLatitude(), m.getLongitude());
+                    if (d < bestD) { bestD = d; best = m; }
+                }
+                if (best != null) graph.addBidirectionalEdge(n.getId(), best.getId(), bestD, false, 1.0);
+            }
+
+            // Manual fallback nodes for gates and parking
             addFallbackIfMissing(graph, "MainGate", 73.86730, 18.46363);
             addFallbackIfMissing(graph, "ExitGate", 73.86730, 18.46337);
             addFallbackIfMissing(graph, "Parking", 73.86814, 18.46351);
 
+            AimlIndoorGraph.addTo(graph);
+            markCrowdHotspots(graph);
+
             return graph;
 
         } catch (IOException e) {
-            e.printStackTrace();
-            return loadFallbackGraph();
+            throw new IllegalStateException("CRITICAL ERROR: Failed to parse coordinates.geojson", e);
         }
+    }
+
+    // Food spots draw crowds at break times; outdoor edges near them get a crowd weight.
+    // shortcut: static hotspots, not live sensing; upgrade by feeding counts from a crowd source.
+    private static final java.util.List<String> CROWD_HOTSPOTS = java.util.List.of(
+            "MainCanteen", "FruitCanteen", "StaffCanteen", "Nescafe", "PuneBakery", "ParathaHouse");
+    private static final double HOTSPOT_RADIUS_M = 35, HOTSPOT_WEIGHT = 2.5;
+
+    private void markCrowdHotspots(Graph graph) {
+        java.util.List<Node> spots = CROWD_HOTSPOTS.stream().map(graph::getNode)
+                .filter(java.util.Objects::nonNull).toList();
+        for (Node n : graph.getNodes()) {
+            if (n.isIndoor()) continue;
+            for (com.campuspath.model.Edge e : n.getEdges()) {
+                if (spots.stream().anyMatch(s -> near(s, n) || near(s, e.getTo()))) {
+                    e.setCrowdMultiplier(HOTSPOT_WEIGHT);
+                }
+            }
+        }
+    }
+
+    private static boolean near(Node a, Node b) {
+        return Haversine.distance(a.getLatitude(), a.getLongitude(), b.getLatitude(), b.getLongitude()) < HOTSPOT_RADIUS_M;
     }
 
     private String getCoordStr(JsonNode coord) {
@@ -148,7 +219,6 @@ public class CampusGraphConfig {
     private void addFallbackIfMissing(Graph graph, String id, double lon, double lat) {
         if (graph.getNode(id) == null) {
             graph.addNode(new Node(id, lon, lat));
-            // Find nearest node to connect to
             Node nearest = null;
             double minDist = Double.MAX_VALUE;
             for (Node n : graph.getNodes()) {
@@ -160,22 +230,15 @@ public class CampusGraphConfig {
                 }
             }
             if (nearest != null) {
-                // Connect it with a straight line
                 graph.addBidirectionalEdge(id, nearest.getId(), minDist, false, 1.0);
             }
         }
     }
 
-    private Graph loadFallbackGraph() {
-        Graph graph = new Graph();
-        graph.addNode(new Node("MainGate", 73.86730, 18.46363));
-        graph.addNode(new Node("AIML", 73.86777, 18.46349));
-        graph.addBidirectionalEdge("MainGate", "AIML", 50, false, 1.0);
-        return graph;
-    }
-
     @Bean
     public com.campuspath.datastructure.KDTree kdTree(Graph graph) {
-        return new com.campuspath.datastructure.KDTree(new java.util.ArrayList<>(graph.getNodes()));
+        // Only outdoor nodes: a GPS fix can't tell floors apart, so never snap to an indoor node.
+        return new com.campuspath.datastructure.KDTree(new java.util.ArrayList<>(
+                graph.getNodes().stream().filter(n -> !n.isIndoor()).toList()));
     }
 }

@@ -15,21 +15,34 @@ import java.util.List;
 public class RouteService {
     private final Graph graph;
     private final KDTree kdTree;
+    private final CrowdService crowd;
     private final AStar aStar = new AStar();
 
     public RouteService(Graph graph, KDTree kdTree) {
+        this(graph, kdTree, new CrowdService());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RouteService(Graph graph, KDTree kdTree, CrowdService crowd) {
         this.graph = graph;
         this.kdTree = kdTree;
+        this.crowd = crowd;
     }
 
     public RouteResult route(String startInput, String endInput,
                              boolean rain, String timeInput) {
+        return route(startInput, endInput, rain, timeInput, true);
+    }
+
+    public RouteResult route(String startInput, String endInput,
+                             boolean rain, String timeInput, boolean avoidCrowds) {
         int time = parseTime(timeInput);
 
         Node start = resolveNode(startInput);
         Node end = resolveNode(endInput);
 
-        List<Node> path = aStar.findPath(start, end, rain, time);
+        var live = crowd.snapshot();
+        List<Node> path = aStar.findPath(start, end, rain, time, avoidCrowds, live);
 
         if (path.isEmpty()) {
             throw new IllegalArgumentException(
@@ -38,7 +51,26 @@ public class RouteService {
 
         double distance = calculateDistance(path);
 
-        return new RouteResult(path, distance, estimateMinutes(distance));
+        // Would the route have been different without the live crowd? (shown to the user)
+        boolean crowdDetour = false;
+        if (avoidCrowds) {
+            List<Node> ignoringLive = aStar.findPath(start, end, rain, time, true, n -> 1.0);
+            crowdDetour = !ignoringLive.equals(path);
+        }
+
+        return new RouteResult(path, distance, estimateMinutes(distance), crowdDetour, coveredOutdoorMeters(path));
+    }
+
+    private double coveredOutdoorMeters(List<Node> path) {
+        double total = 0;
+        for (int i = 0; i < path.size() - 1; i++) {
+            Node a = path.get(i), b = path.get(i + 1);
+            if (a.isIndoor() || b.isIndoor()) continue;
+            for (Edge e : a.getEdges()) {
+                if (e.getTo() == b && e.isCovered()) { total += e.getDistanceMeters(); break; }
+            }
+        }
+        return total;
     }
 
     private Node resolveNode(String input) {
@@ -109,5 +141,7 @@ public class RouteService {
 
     public record RouteResult(List<Node> path,
                               double distanceMeters,
-                              int estimatedTimeMinutes) {}
+                              int estimatedTimeMinutes,
+                              boolean crowdDetour,
+                              double coveredOutdoorMeters) {}
 }

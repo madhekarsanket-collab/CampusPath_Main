@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CampusPath</string>
+    <string name="title_activity_main">CampusPath</string>
+    <string name="package_name">com.vitpune.campuspath</string>
+    <string name="custom_url_scheme">com.vitpune.campuspath</string>
+</resources>
