@@ -87,9 +87,17 @@ document.getElementById('aiml-rooms').innerHTML =
 // ==========================================
 // 2. MAP INITIALIZATION & 3D BUILDINGS
 // ==========================================
+// Offline the Mapbox street style can't load; a plain local style keeps the app working
+// (campus paths are then drawn from the cached routing graph).
+const OFFLINE_STYLE = {
+  version: 8, sources: {},
+  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#eef1ea' } }]
+};
+const startedOffline = !navigator.onLine;
+
 const map = new mapboxgl.Map({
   container: 'map',
-  style: 'mapbox://styles/mapbox/streets-v12',
+  style: startedOffline ? OFFLINE_STYLE : 'mapbox://styles/mapbox/streets-v12',
   center: [73.8682, 18.4635],
   zoom: 17.2,
   pitch: 50,
@@ -103,7 +111,12 @@ map.on('load', () => {
   const layers = map.getStyle().layers;
   const labelLayerId = layers.find(l => l.type === 'symbol' && l.layout && l.layout['text-field'])?.id;
 
-  map.addLayer({
+  if (startedOffline) {
+    map.addSource('offline-paths', { type: 'geojson', data: window.CampusOffline.pathsGeoJson() });
+    map.addLayer({ id: 'offline-paths', type: 'line', source: 'offline-paths',
+      paint: { 'line-color': '#ffffff', 'line-width': 7 } });
+    toast('Offline mode: routes are calculated on your phone.');
+  } else map.addLayer({
     id: '3d-buildings',
     source: 'composite',
     'source-layer': 'building',
@@ -121,6 +134,7 @@ map.on('load', () => {
 
   window.CampusPathAIML?.initLayer?.(map);
   window.CampusPathAIML?.loadInterior?.(API_BASE);
+  window.CampusOffline.refresh(API_BASE); // keep the offline copy of the graph fresh
   loadWeather();
   initCrowdLayer();
 });
@@ -130,6 +144,7 @@ map.on('load', () => {
 // ==========================================
 map.on('click', (e) => {
   if (window.aimlPlacementMode) return; // AIML anchor calibration in progress
+  if (sheet.dataset.state === 'nav') return; // taps while walking must not move the pins
   const coords = [e.lngLat.lng, e.lngLat.lat];
   clickCount++;
   if (clickCount === 1) setStartLocation(coords, true);
@@ -169,6 +184,7 @@ function resetNavigation() {
   startSelect.selectedIndex = 0;
   endSelect.selectedIndex = 0;
   route = null;
+  clearAstar();
   clearRouteLayer();
   window.CampusPathAIML?.clearIndoorRoute?.();
   setXray(false);
@@ -240,19 +256,33 @@ findPathBtn.addEventListener('click', async () => {
     return;
   }
 
+  findPathBtn.disabled = true;
+  findPathBtn.textContent = 'Finding route…';
+  const slowHint = setTimeout(() => { findPathBtn.textContent = 'Waking up the server… (up to a minute)'; }, 4000);
   try {
-    const response = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Server returned HTTP ${response.status}: ${errorText || response.statusText}`);
+    let data;
+    try {
+      const response = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(75000) : undefined // free server may be waking up
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw Object.assign(new Error(`Server returned HTTP ${response.status}: ${errorText || response.statusText}`), { fromServer: true });
+      }
+      data = await response.json();
+    } catch (err) {
+      if (err.fromServer) throw err; // a real "no route" answer: don't mask it
+      // No internet / server unreachable: same A* on the phone, from the cached graph.
+      data = window.CampusOffline.route(payload);
+      toast('Offline: route calculated on your phone.');
     }
-    const data = await response.json();
     stopNavigation();
     setXray(false);
+    clearAstar();
+    lastPayload = payload;
     route = {
       coords: data.geometry.coordinates,
       floors: data.properties.floors || data.geometry.coordinates.map(() => null),
@@ -266,7 +296,11 @@ findPathBtn.addEventListener('click', async () => {
     setSheet('route');
   } catch (error) {
     console.error('Routing request failed:', error);
-    alert(`Failed to find route: ${error.message}\n\nMake sure the Spring Boot server is running on port 8080 (and ADB reverse is set up on a phone).`);
+    alert(`Couldn't find a route: ${error.message}`);
+  } finally {
+    clearTimeout(slowHint);
+    findPathBtn.disabled = false;
+    findPathBtn.textContent = 'Get directions';
   }
 });
 
@@ -377,6 +411,7 @@ function updateNavTop() {
     }
   }
   document.getElementById('nav-top-main').textContent = main;
+  if (sheet.dataset.state === 'nav') speak(main);
   document.getElementById('nav-top-sub').textContent = `${remainingTo(target)} m`;
   const total = remainingTo(last);
   const eta = new Date(Date.now() + Math.ceil(total / 84) * 60000);
@@ -388,6 +423,8 @@ function updateNavTop() {
 function startNavUi() {
   document.getElementById('nav-end-btn').textContent = 'End';
   setSheet('nav');
+  clearAstar();
+  lastSpoken = '';
   userPos = route.coords[0];
   progressIdx = 0;
   updateNavTop();
@@ -397,6 +434,7 @@ function showArrived() {
   navTop.hidden = false;
   navTop.classList.add('arrived');
   document.getElementById('nav-top-main').textContent = 'You have arrived';
+  speak(`You have arrived at ${destinationName().replace(/\(.*\)/, '')}`);
   document.getElementById('nav-top-sub').textContent = destinationName();
   document.getElementById('nav-eta').textContent = 'Arrived';
   document.getElementById('nav-end-btn').textContent = 'Done';
@@ -738,4 +776,122 @@ navSimBtn.addEventListener('click', () => {
     const floor = f0 == null ? f1 == null ? null : 0 : f1 == null ? f0 : f0 + (f1 - f0) * t; // smooth on stairs
     updateUserPosition(p, seg, floor);
   }, tickMs);
+});
+
+// ==========================================
+// 9. SEARCH (type a room number or name)
+// ==========================================
+const destSearch = document.getElementById('dest-search');
+const searchable = () => [...endSelect.options].filter(o => o.value && o.value !== 'pinned');
+document.getElementById('dest-list').innerHTML =
+  searchable().map(o => `<option value="${o.textContent}"></option>`).join('');
+
+// commit = user pressed Enter / picked a suggestion: accept the first partial match too.
+function applySearch(commit) {
+  const q = destSearch.value.trim().toLowerCase();
+  if (!q) return false;
+  const hit = searchable().find(o => o.textContent.toLowerCase() === q || o.value.toLowerCase() === q)
+    || (commit && searchable().find(o => o.textContent.toLowerCase().includes(q)));
+  if (hit) {
+    endSelect.value = hit.value;
+    endCoords = null;
+    endMarker?.remove(); endMarker = null;
+    if (commit) destSearch.value = hit.textContent;
+  }
+  return !!hit;
+}
+destSearch.addEventListener('input', () => applySearch(false));
+destSearch.addEventListener('change', () => applySearch(true));
+destSearch.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (applySearch(true)) findPathBtn.click(); else toast(`No room or place matches "${destSearch.value}"`);
+});
+// Typed but never confirmed? Use the best match when "Get directions" is pressed (runs first: capture).
+findPathBtn.addEventListener('click', () => { if (destSearch.value && !isPlace(endSelect.value)) applySearch(true); }, true);
+endSelect.addEventListener('change', () => { destSearch.value = isPlace(endSelect.value) ? endSelect.selectedOptions[0].textContent : ''; });
+
+// ==========================================
+// 10. VOICE DIRECTIONS
+// ==========================================
+const voiceBtn = document.getElementById('voice-btn');
+let voiceOn = (() => { try { return localStorage.getItem('cp_voice') !== 'off'; } catch { return true; } })();
+let lastSpoken = '';
+
+function syncVoiceBtn() {
+  voiceBtn.setAttribute('aria-pressed', String(voiceOn));
+  voiceBtn.setAttribute('aria-label', voiceOn ? 'Voice directions on' : 'Voice directions off');
+}
+syncVoiceBtn();
+voiceBtn.addEventListener('click', () => {
+  voiceOn = !voiceOn;
+  try { localStorage.setItem('cp_voice', voiceOn ? 'on' : 'off'); } catch { /* not persisted */ }
+  syncVoiceBtn();
+  if (!voiceOn) stopSpeaking();
+});
+
+// Native Android TTS in the app (the WebView has no speechSynthesis); browser voice on desktop.
+function speak(text) {
+  if (!voiceOn || !text || text === lastSpoken) return;
+  lastSpoken = text;
+  const tts = window.Capacitor?.Plugins?.TextToSpeech;
+  if (tts) { tts.speak({ text, lang: 'en-IN', rate: 1.0 }).catch(() => {}); return; }
+  if (window.speechSynthesis) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-IN';
+    speechSynthesis.speak(u);
+  }
+}
+function stopSpeaking() {
+  window.Capacitor?.Plugins?.TextToSpeech?.stop?.()?.catch?.(() => {});
+  window.speechSynthesis?.cancel();
+}
+
+// ==========================================
+// 11. "HOW A* SEARCHED" (trial feature)
+// ==========================================
+const astarBtn = document.getElementById('astar-btn');
+const astarInfo = document.getElementById('astar-info');
+let astarAnim = null, lastPayload = null;
+
+function clearAstar() {
+  cancelAnimationFrame(astarAnim);
+  if (map.getLayer('astar-pts')) map.removeLayer('astar-pts');
+  if (map.getSource('astar')) map.removeSource('astar');
+  astarInfo.hidden = true;
+}
+
+astarBtn.addEventListener('click', () => {
+  const explored = route?.props?.explored;
+  if (!explored?.length) return;
+  clearAstar();
+  map.addSource('astar', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'astar-pts', type: 'circle', source: 'astar',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 15, 3, 19, 7],
+      'circle-color': ['case', ['get', 'frontier'], '#f59e0b', '#8b5cf6'],
+      'circle-opacity': 0.85, 'circle-stroke-width': 1, 'circle-stroke-color': '#ffffff'
+    }
+  }, map.getLayer('route-line') ? 'route-line' : undefined);
+  fitRoute();
+
+  // Same search without the heuristic = Dijkstra, run on the phone for comparison.
+  let dijkstra = null;
+  try { dijkstra = window.CampusOffline.route({ ...lastPayload, heuristic: false }).properties.explored.length; } catch { /* no cached graph */ }
+  const total = window.CampusOffline.nodeCount();
+  const feats = explored.map(([lng, lat]) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lng, lat] } }));
+  const duration = 3500, t0 = performance.now();
+  astarInfo.hidden = false;
+
+  const step = now => {
+    const n = Math.min(feats.length, Math.max(1, Math.ceil(feats.length * (now - t0) / duration)));
+    const shown = feats.slice(0, n).map((f, i) => ({ ...f, properties: { frontier: i >= n - 3 } }));
+    map.getSource('astar')?.setData({ type: 'FeatureCollection', features: shown });
+    astarInfo.textContent = `A* examined ${n}${total ? ` of ${total}` : ''} junctions (purple dots) to find the best path.`
+      + (n === feats.length && dijkstra ? ` Dijkstra (no heuristic) would examine ${dijkstra}.` : '');
+    if (n < feats.length) astarAnim = requestAnimationFrame(step);
+  };
+  astarAnim = requestAnimationFrame(step);
 });

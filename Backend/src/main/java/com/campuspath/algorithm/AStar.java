@@ -14,6 +14,12 @@ public class AStar {
     /** liveCrowd: node -> multiplier from live phone pings (1 = nobody there). */
     public List<Node> findPath(Node start, Node goal, boolean rain, int time, boolean avoidCrowds,
                                java.util.function.ToDoubleFunction<Node> liveCrowd) {
+        return findPath(start, goal, rain, time, avoidCrowds, liveCrowd, null);
+    }
+
+    /** exploredOut (optional): receives nodes in the order A* settled them, for visualisation. */
+    public List<Node> findPath(Node start, Node goal, boolean rain, int time, boolean avoidCrowds,
+                               java.util.function.ToDoubleFunction<Node> liveCrowd, List<Node> exploredOut) {
         if (start == null || goal == null) return List.of();
 
         Map<Node, Double> gScore = new HashMap<>();
@@ -40,6 +46,7 @@ public class AStar {
             }
 
             closed.add(current);
+            if (exploredOut != null) exploredOut.add(current);
             if (current.isVirtual() && current != start) continue; // no pass-through
 
             for (Edge edge : current.getEdges()) {
