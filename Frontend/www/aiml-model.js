@@ -647,9 +647,18 @@
     g.strokeStyle = '#ffffff'; g.lineWidth = 6; g.strokeRect(6, 6, c.width - 12, 84);
     g.fillStyle = '#ffffff'; g.font = `bold ${wide ? 40 : 48}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(text, c.width / 2, 50);
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) }));
-    s.scale.set(-1.3 * c.width / 256, 0.5, 1); // negative: the frame matrix flips Y, which would mirror the text
-    return s;
+    // A flat board, not a Sprite: sprite billboarding breaks when the whole Mercator transform
+    // lives in the projection matrix (signs came out mirrored or lying flat).
+    return new THREE.Mesh(new THREE.PlaneGeometry(1.3 * c.width / 256, 0.5),
+      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), side: THREE.DoubleSide }));
+  }
+
+  // Stand a sign upright on a wall, text facing the corridor. facing: 'west' | 'north' | 'south'
+  // (the direction a person reading it looks from = the sign's normal).
+  function mountSign(sign, facing) {
+    const rz = { south: 0, north: Math.PI, west: -Math.PI / 2 }[facing];
+    sign.rotation.set(Math.PI / 2, 0, rz, 'ZYX');
+    return sign;
   }
 
   const MAT = {
@@ -745,8 +754,8 @@
         if (alongX) box(g, MAT.door, x - 0.03, x, y - hw, y + hw, z, z + 2.1);
         else box(g, MAT.door, x - hw, x + hw, y, y + 0.03, z, z + 2.1);
         const text = DOOR_LABELS[id] || id.replace(/^AIML_/, '').replace(/WASHROOM_M.*/, "GENTS' WC").replace(/WASHROOM_F.*/, "LADIES' WC");
-        const s = makeSign(text);
-        s.position.set(alongX ? x - 0.1 : x, alongX ? y : y + 0.1, z + 2.45);
+        const s = mountSign(makeSign(text), alongX ? 'west' : 'north');
+        s.position.set(alongX ? x - 0.06 : x, alongX ? y : y + 0.06, z + 2.45);
         g.add(s);
       };
       F.longArm.forEach(([id, pos]) => door(outerX, -pos, true, id));
@@ -756,14 +765,14 @@
       (F.endWall || []).forEach(([id, east]) => {
         const x = cx + east;
         box(g, MAT.door, x - 0.42, x + 0.42, -0.03, 0, z, z + 2.1);
-        const s = makeSign(id);
-        s.position.set(x, -0.1, z + 2.45);
+        const s = mountSign(makeSign(id), 'south');
+        s.position.set(x, -0.06, z + 2.45);
         g.add(s);
       });
       if ((F.endWall || []).length) {
         box(g, MAT.steel, cx - 0.4, cx + 0.4, -0.55, -0.02, z, z + 1.1);          // water cooler
-        const w = makeSign('Drinking Water');
-        w.position.set(cx, -0.15, z + 1.9);
+        const w = mountSign(makeSign('Drinking Water'), 'south');
+        w.position.set(cx, -0.06, z + 1.9);
         w.scale.multiplyScalar(0.6);
         g.add(w);
       }
@@ -799,8 +808,8 @@
         }
         box(g, MAT.stone, x1, x1 + 1.5, -sa + 2.3, -sa - 2.3, z + 1.6, z + 1.8);   // half-landing
         box(g, MAT.steel, x1 + 1.5, x1 + 1.56, -sa - 0.6, -sa - 2.0, z + 1.8, z + 3.9); // lift doors
-        const lift = makeSign('LIFT');
-        lift.position.set(x1 + 1.4, -sa - 1.3, z + 4.2);
+        const lift = mountSign(makeSign('LIFT'), 'west');
+        lift.position.set(x1 + 1.5, -sa - 1.3, z + 4.2);
         g.add(lift);
       }
       g.visible = false;

@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>CampusPath - 3D Campus Navigation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <!-- Mapbox GL JS -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.2.0/mapbox-gl.css" rel="stylesheet" />
@@ -304,17 +306,140 @@
         max-height: 48vh;
       }
     }
+
+    /* ============ CampusPath UI (minimal, mobile-first) ============ */
+    :root {
+      --primary: #2563eb; --primary-dark: #1d4ed8; --on-primary: #fff;
+      --success: #059669; --danger: #dc2626;
+      --fg: #0f172a; --muted: #475569; --border: #e2e8f0; --surface: #fff; --surface-2: #f1f5f9;
+      --radius: 16px; --shadow: 0 8px 30px rgba(15, 23, 42, .14);
+      --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+    }
+    [hidden] { display: none !important; }
+    body { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: var(--fg); }
+    svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+    .sheet {
+      position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+      background: var(--surface); border-radius: 20px 20px 0 0; box-shadow: var(--shadow);
+      padding: 8px 16px calc(16px + var(--safe-b)); max-height: 62vh; overflow-y: auto;
+    }
+    .sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: #cbd5e1; margin: 2px auto 10px; }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; margin-bottom: 10px; }
+    .brand-logo { color: var(--primary); }
+    .brand-sub { font-weight: 500; font-size: 12px; color: var(--muted); }
+    .title { font-size: 22px; font-weight: 700; margin: 4px 0 12px; }
+
+    .state { display: none; }
+    .sheet[data-state="plan"] .state-plan, .sheet[data-state="route"] .state-route, .sheet[data-state="nav"] .state-nav { display: block; }
+    .sheet[data-state="nav"] .brand, .sheet[data-state="nav"] .sheet-handle { display: none; }
+
+    .field-stack { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+    .field { display: flex; align-items: center; gap: 12px; padding: 0 14px; min-height: 52px; background: var(--surface); }
+    .field + .field { border-top: 1px solid var(--border); }
+    .field select { flex: 1; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--fg); min-height: 48px; outline: none; cursor: pointer; }
+    .field:focus-within { background: var(--surface-2); }
+    .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .dot-start { background: var(--success); box-shadow: 0 0 0 3px #d1fae5; }
+    .dot-end { background: var(--danger); box-shadow: 0 0 0 3px #fee2e2; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px;
+      background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 500; }
+    .chip svg { width: 16px; height: 16px; }
+    .chip-toggle { cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--fg); transition: background .2s, color .2s, border-color .2s; }
+    .chip-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+    .chip-toggle:has(input:checked) { background: #dbeafe; border-color: var(--primary); color: var(--primary-dark); }
+    .chip-toggle:has(input:focus-visible) { outline: 3px solid #93c5fd; outline-offset: 2px; }
+    .chip-good { background: #d1fae5; color: #065f46; }
+    .chip-warn { background: #ffedd5; color: #9a3412; }
+
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 48px;
+      border: 0; border-radius: 12px; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
+      transition: background .2s, transform .1s; }
+    .btn:active { transform: scale(.98); }
+    .btn:focus-visible, .icon-btn:focus-visible, .btn-link:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+    .btn-primary { background: var(--primary); color: var(--on-primary); }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-secondary { background: var(--surface-2); color: var(--fg); }
+    .btn-secondary:hover { background: #e2e8f0; }
+    .btn-danger { background: #fee2e2; color: #b91c1c; width: auto; padding: 0 22px; }
+    .btn[disabled] { opacity: .55; cursor: progress; }
+    .btn-row { display: flex; gap: 10px; margin-top: 12px; }
+    .btn-link { background: none; border: 0; color: var(--muted); font: inherit; font-size: 13px; text-decoration: underline;
+      cursor: pointer; min-height: 44px; width: 100%; }
+    .hint { font-size: 13px; color: var(--muted); text-align: center; margin-top: 10px; }
+    .muted { font-size: 14px; color: var(--muted); }
+    .big-num { font-size: 26px; font-weight: 700; color: var(--success); line-height: 1.2; }
+
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%;
+      border: 0; background: var(--surface-2); color: var(--fg); cursor: pointer; }
+    .route-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .steps { list-style: none; counter-reset: s; margin: 4px 0 0; }
+    .steps li { counter-increment: s; position: relative; padding: 10px 0 10px 40px; font-size: 15px; line-height: 1.45; border-bottom: 1px solid var(--surface-2); }
+    .steps li::before { content: counter(s); position: absolute; left: 0; top: 9px; width: 26px; height: 26px; border-radius: 50%;
+      background: #dbeafe; color: var(--primary-dark); font-size: 13px; font-weight: 700; display: grid; place-items: center; }
+    .steps li:last-child::before { background: #d1fae5; color: #065f46; }
+
+    .nav-top { position: absolute; z-index: 25; top: calc(12px + var(--safe-t)); left: 12px; right: 12px;
+      display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: var(--radius);
+      background: #0f5132; color: #fff; box-shadow: var(--shadow); }
+    .nav-top-icon { width: 34px; height: 34px; stroke-width: 2.5; }
+    .nav-top-main { font-size: 19px; font-weight: 700; line-height: 1.25; }
+    .nav-top-sub { font-size: 14px; opacity: .85; margin-top: 2px; }
+    .nav-top.arrived { background: var(--success); }
+    .state-nav .btn-secondary { margin-top: 12px; }
+
+    .toast { position: absolute; z-index: 30; left: 50%; transform: translateX(-50%); bottom: calc(64vh + 8px);
+      max-width: calc(100% - 32px); background: var(--fg); color: #fff; padding: 12px 16px; border-radius: 12px;
+      font-size: 14px; box-shadow: var(--shadow); }
+    .dev-toggle { position: absolute; z-index: 15; top: calc(12px + var(--safe-t)); right: 12px; background: var(--surface); box-shadow: var(--shadow); }
+    #dev-panel { top: 64px; }
+
+    /* Desktop: the sheet becomes a floating side panel */
+    @media (min-width: 900px) {
+      .sheet { left: 16px; top: 16px; bottom: auto; right: auto; width: 380px; border-radius: var(--radius); max-height: calc(100vh - 32px); padding: 16px; }
+      .sheet-handle { display: none; }
+      .nav-top { left: 412px; right: auto; width: min(460px, calc(100vw - 440px)); }
+      .toast { bottom: 24px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   </style>
 </head>
 <body>
 
-  <!-- Controls overlay -->
-  <div class="nav-panel">
-    <div class="form-group">
-      <label for="start-select">Start Location</label>
-      <select id="start-select">
-        <option value="" disabled selected>Select start location...</option>
-        <option value="gps">📍 My current location</option>
+  <!-- Turn-by-turn card (navigation mode) -->
+  <div id="nav-top" class="nav-top" hidden role="status" aria-live="polite">
+    <svg class="nav-top-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+    <div>
+      <div id="nav-top-main" class="nav-top-main"></div>
+      <div id="nav-top-sub" class="nav-top-sub"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <button id="dev-toggle" class="icon-btn dev-toggle" type="button" aria-label="3D calibration tools" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+
+  <!-- Bottom sheet (phone) / side panel (desktop): plan -> route -> navigate -->
+  <section id="sheet" class="sheet" data-state="plan" aria-label="Directions">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="brand">
+      <svg class="brand-logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s7-6.1 7-12a7 7 0 1 0-14 0c0 5.9 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      <span>CampusPath</span><span class="brand-sub">VIT Pune · AIML Building 4</span>
+    </header>
+
+    <!-- 1. PLAN -->
+    <div class="state state-plan">
+      <h1 class="title">Where to?</h1>
+      <div class="field-stack">
+        <div class="field">
+          <span class="dot dot-start" aria-hidden="true"></span>
+          <select id="start-select" aria-label="Start location">
+        <option value="" disabled selected>Choose start</option>
+        <option value="gps">My current location</option>
         <option value="pinned">Pinned on Map</option>
         <option value="MainGate">Main Gate</option>
         <option value="ExitGate">Exit Gate</option>
@@ -322,13 +447,12 @@
         <option value="Auditorium">Auditorium</option>
         <option value="MainCanteen">Main Canteen</option>
         <option value="Parking">Parking</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label for="end-select">Destination</label>
-      <select id="end-select">
-        <option value="" disabled selected>Select destination...</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="dot dot-end" aria-hidden="true"></span>
+          <select id="end-select" aria-label="Destination">
+        <option value="" disabled selected>Choose a room or place</option>
         <option value="pinned">Pinned on Map</option>
         <optgroup id="aiml-rooms" label="AIML Building 4 (rooms)"></optgroup>
         <optgroup label="Campus">
@@ -338,29 +462,67 @@
           <option value="MainCanteen">Main Canteen</option>
           <option value="Parking">Parking</option>
         </optgroup>
-      </select>
+          </select>
+        </div>
+      </div>
+
+      <div class="chips">
+        <label class="chip chip-toggle">
+          <input type="checkbox" id="chk-rain" />
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12a10 10 0 0 0-20 0z"/><path d="M12 12v7a2 2 0 0 0 4 0"/></svg>
+          Rain-free
+        </label>
+        <span class="chip chip-info">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z"/></svg>
+          <span id="weather-info">Checking weather…</span>
+        </span>
+        <span class="chip chip-info">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>
+          <span id="crowd-info">Live crowd…</span>
+        </span>
+      </div>
+
+      <button id="find-path-btn" class="btn btn-primary" type="button">Get directions</button>
+      <p class="hint">Or tap the map: first tap sets the start, second the destination.</p>
+      <button id="demo-crowd-btn" class="btn-link" type="button">Demo: add 6 test phones at Entrance 2</button>
     </div>
 
-    <div class="form-group" style="font-size:13px;">
-      <label><input type="checkbox" id="chk-rain" /> Rain-free path</label>
+    <!-- 2. ROUTE -->
+    <div class="state state-route">
+      <div class="route-head">
+        <div>
+          <div id="route-time" class="big-num"></div>
+          <div id="route-dist" class="muted"></div>
+        </div>
+        <button id="route-close" class="icon-btn" type="button" aria-label="Close route">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="route-badges" class="chips"></div>
+      <ol id="route-steps" class="steps"></ol>
+      <div class="btn-row">
+        <button id="nav-start-btn" class="btn btn-primary" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 19-9-9 19-2-8z"/></svg> Start
+        </button>
+        <button id="nav-sim-btn" class="btn btn-secondary" type="button">Preview walk</button>
+      </div>
     </div>
-    <div id="weather-info" class="instructions"></div>
-    <div id="crowd-info" class="instructions"></div>
-    <button id="demo-crowd-btn" type="button" style="width:100%; margin:4px 0; font-size:12px;">🧪 Demo: send 6 test phones to Entrance 2</button>
 
-    <button id="find-path-btn">Find Path</button>
-    <div style="display:flex; gap:6px; margin-top:6px;">
-      <button id="nav-start-btn" type="button" disabled style="flex:1;">▶ Start (GPS)</button>
-      <button id="nav-sim-btn" type="button" disabled style="flex:1;">🚶 Simulate walk</button>
+    <!-- 3. NAVIGATING -->
+    <div class="state state-nav">
+      <div class="route-head">
+        <div>
+          <div id="nav-eta" class="big-num"></div>
+          <div id="step-info" class="muted"></div>
+        </div>
+        <button id="nav-end-btn" class="btn btn-danger" type="button">End</button>
+      </div>
+      <button id="nav-checkpoint-btn" class="btn btn-secondary" type="button" hidden></button>
     </div>
-    <div id="nav-banner" class="instructions" style="font-weight:600; color:#1d4ed8;"></div>
-    <button id="nav-checkpoint-btn" type="button" hidden style="margin-top:6px; width:100%;"></button>
-    <div id="step-info" class="instructions"></div>
-    <div class="instructions">Tip: Click map once for Start (Green), twice for End (Red), 3rd to reset.</div>
-  </div>
+  </section>
 
-  <!-- AIML Building 3D Controls & Comprehensive Calibration Panel -->
-  <aside class="aiml-controls" aria-label="AIML 3D Controls">
+  <!-- AIML Building 3D Controls & Comprehensive Calibration Panel (developer tool) -->
+  <aside id="dev-panel" class="aiml-controls" aria-label="AIML 3D Controls" hidden>
     <div class="aiml-controls-heading">
       <strong>AIML Building 4</strong>
       <button id="toggle-cal-panel" class="secondary-btn" style="padding:4px 8px;" type="button">⚙️ Expand Calibration</button>
