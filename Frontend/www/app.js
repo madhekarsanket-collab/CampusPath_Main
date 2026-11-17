@@ -411,7 +411,14 @@ function updateNavTop() {
     }
   }
   document.getElementById('nav-top-main').textContent = main;
-  if (sheet.dataset.state === 'nav') speak(main);
+  if (sheet.dataset.state === 'nav') {
+    // Speak only the meaningful steps: one stairs instruction, not every landing / floor.
+    const destFloor = route.floors[route.floors.length - 1];
+    if (main === 'Go to the stairs' && destFloor > 0) speak(`Go to the stairs, then up to floor ${destFloor}`);
+    else if (main.startsWith('Climb to Floor')) { if (main.endsWith(` ${destFloor}`)) speak(`You're almost on floor ${destFloor}`); }
+    else if (main.startsWith('Head to') && route.floors.some(f => f != null)) { /* already said "…is ahead" */ }
+    else if (main !== 'Climb to the landing') speak(main);
+  }
   document.getElementById('nav-top-sub').textContent = `${remainingTo(target)} m`;
   const total = remainingTo(last);
   const eta = new Date(Date.now() + Math.ceil(total / 84) * 60000);
@@ -474,7 +481,12 @@ function lookAhead(pos) {
   return c[c.length - 1];
 }
 
+// The user dragged / rotated / tilted the map: let them look around for a few seconds.
+let followPausedUntil = 0;
+map.on('movestart', e => { if (e.originalEvent) followPausedUntil = Date.now() + 6000; });
+
 function followCamera(pos, floor, animate) {
+  if (Date.now() < followPausedUntil) return;
   const target = bearingTo(pos, lookAhead(pos));
   if (camBearing === null) camBearing = target;
   camBearing += ((((target - camBearing) % 360) + 540) % 360 - 180) * (animate ? 1 : 0.15); // smooth turns
@@ -487,12 +499,17 @@ function followCamera(pos, floor, animate) {
   }
   // Indoors: free camera just behind and above the walker (above the 3.2 m walls), looking
   // down the corridor ahead.
-  const back = 9, rad = camBearing * Math.PI / 180;
+  // Corridors: low and tilted toward the horizon so the way ahead is visible.
+  // Stairs: higher overview, because a low camera would face the stair-hall wall.
+  const ids = [route.nodeIds[progressIdx], route.nodeIds[progressIdx + 1]].join(' ');
+  const onStairs = Math.abs(floor - Math.round(floor)) > 0.01 || /STAIRS|LANDING|LIFT/.test(ids);
+  const [back, height, pitch] = onStairs ? [9, 8, 55] : [7, 4.2, 70];
+  const rad = camBearing * Math.PI / 180;
   const mLng = 111320 * Math.cos(pos[1] * Math.PI / 180);
   const behind = [pos[0] - Math.sin(rad) * back / mLng, pos[1] - Math.cos(rad) * back / 110574];
   const cam = map.getFreeCameraOptions();
-  cam.position = mapboxgl.MercatorCoordinate.fromLngLat(behind, window.CampusPathAIML.floorHeight(floor) + 6.5);
-  cam.setPitchBearing(55, camBearing);
+  cam.position = mapboxgl.MercatorCoordinate.fromLngLat(behind, window.CampusPathAIML.floorHeight(floor) + height);
+  cam.setPitchBearing(pitch, camBearing);
   map.setFreeCameraOptions(cam);
 }
 
@@ -830,16 +847,52 @@ voiceBtn.addEventListener('click', () => {
   if (!voiceOn) stopSpeaking();
 });
 
+// Make text sound natural: "4308" -> "room 4 3 0 8" (not "four thousand..."), drop "(Floor 3)".
+function speakable(text) {
+  return text
+    .replace(/\s*\((Floor \d|Ground)\)/g, '')
+    .replace(/\b4\d{3}(-B)?\b/g, m => `room ${m.replace('-B', ' B').split('').join(' ')}`)
+    .replace(/room room/gi, 'room')
+    .replace(/–/g, ',');
+}
+
+// Pick the most natural installed voice once: Indian English first, then UK/US; prefer
+// high-quality "network"/Google voices over the default robotic one.
+let ttsVoice = undefined, webVoice = null;
+async function chooseVoice() {
+  const tts = window.Capacitor?.Plugins?.TextToSpeech;
+  const rank = v => (/en[-_]IN/i.test(v.lang) ? 30 : /en[-_]GB/i.test(v.lang) ? 20 : /^en/i.test(v.lang) ? 10 : 0)
+    + (/network|google|natural|neural/i.test(`${v.name} ${v.voiceURI}`) ? 5 : 0) + (v.localService === false ? 2 : 0);
+  try {
+    if (tts) {
+      const { voices } = await tts.getSupportedVoices();
+      let best = -1;
+      voices.forEach((v, i) => { if (best < 0 || rank(v) > rank(voices[best])) best = i; });
+      if (best >= 0 && rank(voices[best]) > 0) ttsVoice = best;
+    } else if (window.speechSynthesis) {
+      const vs = speechSynthesis.getVoices();
+      webVoice = vs.slice().sort((a, b) => rank(b) - rank(a))[0] || null;
+    }
+  } catch { /* default voice */ }
+}
+chooseVoice();
+window.speechSynthesis?.addEventListener?.('voiceschanged', chooseVoice);
+
 // Native Android TTS in the app (the WebView has no speechSynthesis); browser voice on desktop.
 function speak(text) {
   if (!voiceOn || !text || text === lastSpoken) return;
   lastSpoken = text;
+  const say = speakable(text);
   const tts = window.Capacitor?.Plugins?.TextToSpeech;
-  if (tts) { tts.speak({ text, lang: 'en-IN', rate: 1.0 }).catch(() => {}); return; }
+  if (tts) {
+    tts.speak({ text: say, lang: 'en-IN', rate: 0.9, pitch: 1.0, ...(ttsVoice !== undefined ? { voice: ttsVoice } : {}) }).catch(() => {});
+    return;
+  }
   if (window.speechSynthesis) {
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-IN';
+    const u = new SpeechSynthesisUtterance(say);
+    u.lang = 'en-IN'; u.rate = 0.92;
+    if (webVoice) u.voice = webVoice;
     speechSynthesis.speak(u);
   }
 }
@@ -895,3 +948,61 @@ astarBtn.addEventListener('click', () => {
   };
   astarAnim = requestAnimationFrame(step);
 });
+
+// ==========================================
+// 12. DARK MODE
+// ==========================================
+const themeBtn = document.getElementById('theme-btn');
+const OUR_LAYERS = new Set(['route-line', 'crowd-heat', 'astar-pts', 'campuspath-aiml-glb']);
+const originalPaint = new Map(); // "layerId|prop" -> light value, to restore
+
+// Dark colour for a Mapbox style layer, chosen from its type and id (water, parks, roads...).
+function darkPaint(layer) {
+  const id = layer.id;
+  const is = re => re.test(id);
+  switch (layer.type) {
+    case 'background': return { 'background-color': '#12161d' };
+    case 'fill': return { 'fill-color': is(/water/) ? '#13263a' : is(/park|grass|wood|pitch|landuse|national/) ? '#17261e' : '#1a1f27' };
+    case 'line': return { 'line-color': is(/water|river/) ? '#13263a' : is(/road|street|path|bridge|tunnel|offline/) ? '#38404e' : '#262c36' };
+    case 'fill-extrusion': return { 'fill-extrusion-color': '#2b313c' };
+    case 'symbol': return layer.layout?.['text-field'] ? { 'text-color': '#cbd5e1', 'text-halo-color': '#0b0f14' } : {};
+    default: return {};
+  }
+}
+
+function themeMap(dark) {
+  if (!map.isStyleLoaded()) return;
+  for (const layer of map.getStyle().layers) {
+    if (OUR_LAYERS.has(layer.id)) continue;
+    for (const [prop, value] of Object.entries(darkPaint(layer))) {
+      const key = `${layer.id}|${prop}`;
+      try {
+        if (dark) {
+          if (!originalPaint.has(key)) originalPaint.set(key, map.getPaintProperty(layer.id, prop));
+          map.setPaintProperty(layer.id, prop, value);
+        } else if (originalPaint.has(key)) {
+          map.setPaintProperty(layer.id, prop, originalPaint.get(key));
+        }
+      } catch { /* property not valid for this layer */ }
+    }
+  }
+}
+
+let darkMode = (() => {
+  try { const s = localStorage.getItem('cp_theme'); if (s) return s === 'dark'; } catch { /* default */ }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+})();
+
+function applyTheme() {
+  document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+  themeBtn.setAttribute('aria-pressed', String(darkMode));
+  themeBtn.setAttribute('aria-label', darkMode ? 'Switch to light mode' : 'Switch to dark mode');
+  themeMap(darkMode);
+}
+themeBtn.addEventListener('click', () => {
+  darkMode = !darkMode;
+  try { localStorage.setItem('cp_theme', darkMode ? 'dark' : 'light'); } catch { /* not persisted */ }
+  applyTheme();
+});
+applyTheme();
+map.on('load', () => applyTheme()); // the map's own layers exist only after load
