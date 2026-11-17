@@ -89,7 +89,7 @@ public final class AimlIndoorGraph {
                 // 4006 is on the corner wall facing up the long corridor (west = 0);
                 // the Center of Excellence in AI faces Entrance 1 across the short arm.
                 new Slot("4006", 0), new Slot("AIML_COE_AI", 5), new Slot("4007", 13),
-                new Slot("4008", 17), new Slot("AIML_WASHROOM_F_0", 20));
+                new Slot("4008", 17));
         return List.of(new Slot("4" + f + "07", 5), new Slot("4" + f + "08", 12), new Slot("4" + f + "09", 19));
     }
 
@@ -122,6 +122,11 @@ public final class AimlIndoorGraph {
         for (Slot s : shortArm) {
             addNode(g, s.id(), CORRIDOR_EAST - s.pos(), -CORNER_ALONG - DOOR_OFFSET, f);
             edge(g, s.id(), westNode(f, s.pos()), DOOR_OFFSET);
+        }
+        // Ladies' washroom: on the far west end wall of the short arm (ground floor).
+        if (f == 0) {
+            addNode(g, "AIML_WASHROOM_F_0", CORRIDOR_EAST - WEST_END - DOOR_OFFSET, -CORNER_ALONG, f);
+            edge(g, "AIML_WASHROOM_F_0", westNode(f, WEST_END), DOOR_OFFSET);
         }
         for (Slot s : endWall(f)) {
             addNode(g, s.id(), CORRIDOR_EAST + s.pos(), 0.5, f);

@@ -5,7 +5,12 @@ mapboxgl.accessToken = 'pk.eyJ1Ijoic2FuNDA0MGciLCJhIjoiY211bjFrY2l0MDV6bTJ6czl3N
 
 // Backend endpoint. Desktop: localhost. Phone: needs `adb reverse tcp:8080 tcp:8080`
 // (or change to the laptop's LAN IP / a hosted URL).
-const API_BASE = 'http://localhost:8080';
+// Laptop testing (served on :8000) uses the local backend; the Android app uses the hosted one.
+const HOSTED_API = 'https://campuspath-backend.onrender.com';
+const API_BASE = (() => {
+  try { const o = localStorage.getItem('cp_api'); if (o) return o; } catch { /* storage blocked */ }
+  return location.port === '8000' ? 'http://localhost:8080' : HOSTED_API;
+})();
 const BACKEND_URL = `${API_BASE}/api/route`;
 
 // Named rooms (from the signboards in the user's floor-3 photos).
