@@ -55,6 +55,9 @@ const toastEl = document.getElementById('toast');
 // Bottom sheet has three steps: 'plan' (where to?) -> 'route' (summary) -> 'nav' (walking).
 function setSheet(state) {
   sheet.dataset.state = state;
+  // A new screen starts centred; the button comes back the next time the user moves the map.
+  document.getElementById('recenter-btn').hidden = true;
+  followPaused = false;
   navTop.hidden = state !== 'nav';
   navTop.classList.remove('arrived');
 }
@@ -520,12 +523,25 @@ function lookAhead(pos) {
   return c[c.length - 1];
 }
 
-// The user dragged / rotated / tilted the map: let them look around for a few seconds.
-let followPausedUntil = 0;
-map.on('movestart', e => { if (e.originalEvent) followPausedUntil = Date.now() + 6000; });
+// The user dragged / rotated / tilted the map: stop following until they tap "Re-centre".
+let followPaused = false;
+const recenterBtn = document.getElementById('recenter-btn');
+map.on('movestart', e => {
+  if (!e.originalEvent) return; // our own camera moves don't count
+  followPaused = sheet.dataset.state === 'nav';
+  recenterBtn.hidden = false;
+});
+recenterBtn.addEventListener('click', () => {
+  recenterBtn.hidden = true;
+  followPaused = false;
+  const state = sheet.dataset.state;
+  if (state === 'nav' && userPos) followCamera(userPos, userFloor, true);
+  else if (state === 'route' && route) fitRoute();
+  else map.flyTo({ center: [73.8682, 18.4635], zoom: 17.2, pitch: 50, bearing: -15, duration: 1000 });
+});
 
 function followCamera(pos, floor, animate) {
-  if (Date.now() < followPausedUntil) return;
+  if (followPaused) return;
   const target = bearingTo(pos, lookAhead(pos));
   if (camBearing === null) camBearing = target;
   camBearing += ((((target - camBearing) % 360) + 540) % 360 - 180) * (animate ? 1 : 0.15); // smooth turns
