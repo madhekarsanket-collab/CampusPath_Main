@@ -70,6 +70,7 @@ function toast(msg) {
 document.getElementById('route-close').addEventListener('click', () => resetNavigation());
 document.getElementById('nav-end-btn').addEventListener('click', () => {
   stopNavigation();
+  clearWalker();
   setXray(false);
   setSheet('route');
   fitRoute();
@@ -81,8 +82,10 @@ document.getElementById('dev-toggle').addEventListener('click', e => {
 });
 const chkRain = document.getElementById('chk-rain');
 
-document.getElementById('aiml-rooms').innerHTML =
-  AIML_ROOMS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
+// Every AIML room is both a destination and a possible start (e.g. 4109 -> 4207).
+const roomOptions = AIML_ROOMS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
+document.getElementById('aiml-rooms').innerHTML = roomOptions;
+document.getElementById('start-rooms').innerHTML = roomOptions;
 
 // ==========================================
 // 2. MAP INITIALIZATION & 3D BUILDINGS
@@ -165,14 +168,21 @@ function setStartLocation(coords, isPinned) {
   startCoords = coords;
   startMarker?.remove();
   startMarker = new mapboxgl.Marker({ color: '#10b981' }).setLngLat(coords).addTo(map);
-  if (isPinned) startSelect.value = 'pinned';
+  if (isPinned) { startSelect.value = 'pinned'; startSearch.value = 'Pinned on map'; }
 }
 
 function setEndLocation(coords, isPinned) {
   endCoords = coords;
   endMarker?.remove();
   endMarker = new mapboxgl.Marker({ color: '#ef4444' }).setLngLat(coords).addTo(map);
-  if (isPinned) endSelect.value = 'pinned';
+  if (isPinned) { endSelect.value = 'pinned'; destSearch.value = 'Pinned on map'; }
+}
+
+// Remove the walker's dot from a previous navigation (it must not look like the new start).
+function clearWalker() {
+  userMarker?.remove(); userMarker = null;
+  userPos = null; userFloor = null;
+  window.CampusPathAIML?.setUserPosition?.(null);
 }
 
 function resetNavigation() {
@@ -183,6 +193,8 @@ function resetNavigation() {
   endMarker?.remove(); endMarker = null;
   startSelect.selectedIndex = 0;
   endSelect.selectedIndex = 0;
+  startSearch.value = destSearch.value = '';
+  clearWalker();
   route = null;
   clearAstar();
   clearRouteLayer();
@@ -228,7 +240,7 @@ findPathBtn.addEventListener('click', async () => {
     time: (() => { const d = new Date(); return String(d.getHours() * 100 + d.getMinutes()).padStart(4, '0'); })()
   };
   if (isPlace(startSelect.value)) payload.startNode = startSelect.value;
-  else if (startCoords) payload.start = { lng: startCoords[0], lat: startCoords[1] };
+  else if (startCoords && startSelect.value === 'pinned') payload.start = { lng: startCoords[0], lat: startCoords[1] };
   else {
     // No start chosen: use where the phone actually is (asks for location permission once).
     findPathBtn.disabled = true;
@@ -237,8 +249,7 @@ findPathBtn.addEventListener('click', async () => {
       const p = await new Promise((ok, fail) => navigator.geolocation
         ? navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: true, timeout: 12000 })
         : fail(new Error('Location not available')));
-      setStartLocation([p.coords.longitude, p.coords.latitude], false);
-      startSelect.value = 'gps';
+      setStartLocation([p.coords.longitude, p.coords.latitude], false); // fresh fix every time
       payload.start = { lng: p.coords.longitude, lat: p.coords.latitude };
     } catch (err) {
       alert('Could not get your location (' + err.message + '). Allow location access, or choose a start point.');
@@ -282,6 +293,7 @@ findPathBtn.addEventListener('click', async () => {
     stopNavigation();
     setXray(false);
     clearAstar();
+    clearWalker();
     lastPayload = payload;
     route = {
       coords: data.geometry.coordinates,
@@ -307,16 +319,24 @@ findPathBtn.addEventListener('click', async () => {
 // Draws everything from progressIdx onward: the walked part disappears, like Google Maps.
 function renderRoute() {
   if (!route) return;
-  const { coords, floors } = route;
-  const firstIndoor = floors.findIndex(f => f !== null && f !== undefined);
-  const outdoorEnd = firstIndoor < 0 ? coords.length : firstIndoor; // entrance node is last outdoor point
-  // Start the line exactly at the walker, so nothing behind them stays drawn.
+  // What is still ahead, starting exactly at the walker so nothing behind them stays drawn.
   const tracking = userPos && route.navigating;
-  const outdoor = tracking
-    ? (progressIdx < outdoorEnd - 1 ? [userPos, ...coords.slice(progressIdx + 1, outdoorEnd)] : [])
-    : coords.slice(0, outdoorEnd);
+  const from = tracking ? progressIdx : 0;
+  const coords = route.coords.slice(from), floors = route.floors.slice(from);
+  if (tracking) { coords[0] = userPos; floors[0] = userFloor; }
+  const inside = f => f !== null && f !== undefined;
 
-  const feature = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: outdoor.length >= 2 ? outdoor : [] } };
+  // Outdoor stretches (before entering and/or after leaving AIML) as 2D map lines;
+  // each ends or starts at the entrance node, which is an outdoor point.
+  const lines = [];
+  let run = [];
+  coords.forEach((c, i) => {
+    if (inside(floors[i])) { if (run.length >= 2) lines.push(run); run = []; }
+    else run.push(c);
+  });
+  if (run.length >= 2) lines.push(run);
+
+  const feature = { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } };
   if (map.getSource('route-source')) {
     map.getSource('route-source').setData(feature);
   } else {
@@ -328,11 +348,13 @@ function renderRoute() {
     });
   }
 
-  if (firstIndoor >= 0) {
-    const from = Math.max(tracking ? progressIdx : 0, firstIndoor - 1);
-    const c = coords.slice(from), f = floors.slice(from);
-    if (tracking && progressIdx >= firstIndoor - 1) { c[0] = userPos; f[0] = userFloor; }
-    window.CampusPathAIML?.setIndoorRoute?.(c, f);
+  // Indoor stretch in 3D: from the point before the first indoor node to the one after the last.
+  const firstIn = floors.findIndex(inside);
+  if (firstIn >= 0) {
+    let lastIn = floors.length - 1;
+    while (!inside(floors[lastIn])) lastIn--;
+    const a = Math.max(0, firstIn - 1), b = Math.min(floors.length, lastIn + 2);
+    window.CampusPathAIML?.setIndoorRoute?.(coords.slice(a, b), floors.slice(a, b));
   } else {
     window.CampusPathAIML?.clearIndoorRoute?.();
   }
@@ -355,16 +377,31 @@ const destinationName = () =>
 // Human directions, built from the node ids the backend returns.
 function routeSteps() {
   const { nodeIds, floors } = route;
-  const steps = [];
+  const inside = f => f !== null && f !== undefined;
+  const startFloor = floors[0], destFloor = floors[floors.length - 1];
+  const floorName = f => (f === 0 ? 'the ground floor' : `floor ${f}`);
+  const entName = id => (id === 'AIML_E1' ? 'Entrance 1 (the corner gate)' : 'Entrance 2 (the north gate)');
+  const viaLift = nodeIds.some(id => id.startsWith('AIML_LIFT'));
+  const changeFloor = (to, down) => viaLift
+    ? `Take the lift (it stops at the half-landings), then half a flight ${down ? 'down' : 'up'} to ${floorName(to)}`
+    : `Take the zig-zag stairs ${down ? 'down' : 'up'} to ${floorName(to)}`;
   const entrance = nodeIds.find(id => id.startsWith('AIML_E'));
-  if (entrance) steps.push(`Walk to AIML ${entrance === 'AIML_E1' ? 'Entrance 1 (the corner gate)' : 'Entrance 2 (the north gate)'}`);
-  const destFloor = floors[floors.length - 1];
-  if (destFloor > 0) {
-    steps.push(nodeIds.some(id => id.startsWith('AIML_LIFT'))
-      ? `Take the lift (it stops at the half-landings), then half a flight up to floor ${destFloor}`
-      : `Take the zig-zag stairs up to floor ${destFloor}`);
+  const steps = [];
+
+  if (inside(startFloor)) {                       // starting in a room inside AIML
+    if (inside(destFloor)) {
+      if (destFloor !== startFloor) steps.push(changeFloor(destFloor, destFloor < startFloor));
+      steps.push(`Walk the corridor to ${destinationName()}`);
+    } else {
+      if (startFloor > 0) steps.push(changeFloor(0, true));
+      if (entrance) steps.push(`Leave AIML by ${entName(entrance)}`);
+      steps.push(`Walk to ${destinationName()}`);
+    }
+  } else {                                        // starting outside
+    if (entrance) steps.push(`Walk to AIML ${entName(entrance)}`);
+    if (destFloor > 0) steps.push(changeFloor(destFloor, false));
+    steps.push(inside(destFloor) ? `Walk the corridor to ${destinationName()}` : `Arrive at ${destinationName()}`);
   }
-  steps.push(destFloor != null ? `Walk the corridor to ${destinationName()}` : `Arrive at ${destinationName()}`);
   return steps;
 }
 
@@ -401,8 +438,10 @@ function updateNavTop() {
     const cp = nextCheckpoint();
     if (cp) {
       target = cp.i;
+      const goingDown = route.floors[cp.i] < (userFloor ?? route.floors[progressIdx] ?? 0);
       main = cp.label === 'Destination door' ? `${destinationName()} is ahead`
-        : cp.label.startsWith('Floor') ? `Climb to ${cp.label.replace(' (top of stairs)', '')}`
+        : cp.label.startsWith('Leave') ? cp.label
+        : cp.label.startsWith('Floor') ? `${goingDown ? 'Go down to' : 'Climb to'} ${cp.label.replace(' (top of stairs)', '').replace('Floor 0', 'the ground floor')}`
         : cp.label === 'Foot of the stairs' ? 'Go to the stairs'
         : cp.label.startsWith('Stair landing') ? 'Climb to the landing'
         : cp.label === 'Corridor corner' ? 'Turn at the corridor corner' : cp.label;
@@ -661,10 +700,13 @@ window.addEventListener('keydown', e => {
 // position there, correcting step-count drift.
 function nextCheckpoint() {
   if (!route) return null;
+  const here = route.floors[progressIdx] ?? 0;
   for (let i = progressIdx + 1; i < route.nodeIds.length; i++) {
     const id = route.nodeIds[i];
     const label =
-      id.startsWith('AIML_STAIRS_') ? (route.floors[i] > 0 ? `Floor ${route.floors[i]} (top of stairs)` : 'Foot of the stairs') :
+      // stairs on my own floor = go to them; on another floor = that floor (up or down)
+      id.startsWith('AIML_STAIRS_') ? (route.floors[i] === here ? 'Foot of the stairs' : `Floor ${route.floors[i]} (top of stairs)`) :
+      id.startsWith('AIML_E') && route.floors[0] != null ? `Leave by Entrance ${id.slice(-1)}` :
       id.startsWith('AIML_LANDING_') ? 'Stair landing (lift doors)' :
       id.startsWith('AIML_LIFT_') ? 'Inside the lift' :
       /_A40(\.0)?$/.test(id) ? 'Corridor corner' :
@@ -750,10 +792,12 @@ function initCrowdLayer() {
 }
 
 navStartBtn.addEventListener('click', () => {
-  if (!navigator.geolocation) return alert('Location is not available on this device.');
   stopNavigation();
   camBearing = null;
   startNavUi();
+  // Starting in a room: GPS can't see floors, so count steps from the room door.
+  if (route.floors[0] !== null && route.floors[0] !== undefined) { startPedometer(0); return; }
+  if (!navigator.geolocation) return alert('Location is not available on this device.');
   gpsWatchId = navigator.geolocation.watchPosition(
     p => {
       const pos = [p.coords.longitude, p.coords.latitude];
@@ -798,34 +842,50 @@ navSimBtn.addEventListener('click', () => {
 // ==========================================
 // 9. SEARCH (type a room number or name)
 // ==========================================
+// Two fields, "From" and "To", each backed by a hidden select that holds the chosen value.
+const startSearch = document.getElementById('start-search');
 const destSearch = document.getElementById('dest-search');
-const searchable = () => [...endSelect.options].filter(o => o.value && o.value !== 'pinned');
+const searchable = sel => [...sel.options].filter(o => o.value && o.value !== 'pinned' && o.value !== 'gps');
 document.getElementById('dest-list').innerHTML =
-  searchable().map(o => `<option value="${o.textContent}"></option>`).join('');
+  searchable(endSelect).map(o => `<option value="${o.textContent}"></option>`).join('');
+document.getElementById('start-list').innerHTML =
+  searchable(startSelect).map(o => `<option value="${o.textContent}"></option>`).join('');
 
-// commit = user pressed Enter / picked a suggestion: accept the first partial match too.
-function applySearch(commit) {
-  const q = destSearch.value.trim().toLowerCase();
-  if (!q) return false;
-  const hit = searchable().find(o => o.textContent.toLowerCase() === q || o.value.toLowerCase() === q)
-    || (commit && searchable().find(o => o.textContent.toLowerCase().includes(q)));
+// commit = Enter / picked a suggestion / Get directions: also accept the first partial match.
+function applySearch(input, commit) {
+  const isStart = input === startSearch;
+  const sel = isStart ? startSelect : endSelect;
+  const q = input.value.trim().toLowerCase();
+  if (q === 'pinned on map') return true; // keep the map pin
+  if (!q) {
+    if (isStart) { startSelect.value = ''; startCoords = null; startMarker?.remove(); startMarker = null; } // = my GPS location
+    return false;
+  }
+  const hit = searchable(sel).find(o => o.textContent.toLowerCase() === q || o.value.toLowerCase() === q)
+    || (commit && searchable(sel).find(o => o.textContent.toLowerCase().includes(q)));
   if (hit) {
-    endSelect.value = hit.value;
-    endCoords = null;
-    endMarker?.remove(); endMarker = null;
-    if (commit) destSearch.value = hit.textContent;
+    sel.value = hit.value;
+    if (isStart) { startCoords = null; startMarker?.remove(); startMarker = null; }
+    else { endCoords = null; endMarker?.remove(); endMarker = null; }
+    if (commit) input.value = hit.textContent;
   }
   return !!hit;
 }
-destSearch.addEventListener('input', () => applySearch(false));
-destSearch.addEventListener('change', () => applySearch(true));
-destSearch.addEventListener('keydown', e => {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  if (applySearch(true)) findPathBtn.click(); else toast(`No room or place matches "${destSearch.value}"`);
-});
-// Typed but never confirmed? Use the best match when "Get directions" is pressed (runs first: capture).
-findPathBtn.addEventListener('click', () => { if (destSearch.value && !isPlace(endSelect.value)) applySearch(true); }, true);
+for (const input of [startSearch, destSearch]) {
+  input.addEventListener('input', () => applySearch(input, false));
+  input.addEventListener('change', () => applySearch(input, true));
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (input === startSearch) { applySearch(input, true); destSearch.focus(); return; }
+    if (applySearch(input, true)) findPathBtn.click(); else toast(`No room or place matches "${input.value}"`);
+  });
+}
+// Typed but never confirmed? Use the best matches when "Get directions" is pressed (runs first: capture).
+findPathBtn.addEventListener('click', () => {
+  if (startSearch.value) applySearch(startSearch, true); else applySearch(startSearch, false);
+  if (destSearch.value && !isPlace(endSelect.value)) applySearch(destSearch, true);
+}, true);
 endSelect.addEventListener('change', () => { destSearch.value = isPlace(endSelect.value) ? endSelect.selectedOptions[0].textContent : ''; });
 
 // ==========================================

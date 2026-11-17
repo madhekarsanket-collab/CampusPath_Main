@@ -361,6 +361,8 @@
     .field-stack { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
     .field { display: flex; align-items: center; gap: 12px; padding: 0 14px; min-height: 52px; background: var(--surface); }
     .field + .field { border-top: 1px solid var(--border); }
+    .field input { flex: 1; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--fg); min-height: 48px; outline: none; }
+    .field input::placeholder { color: var(--muted); }
     .field select { flex: 1; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--fg); min-height: 48px; outline: none; cursor: pointer; }
     .field:focus-within { background: var(--surface-2); }
     .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
@@ -462,42 +464,48 @@
     <!-- 1. PLAN -->
     <div class="state state-plan">
       <h1 class="title">Where to?</h1>
-      <label class="search">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        <input id="dest-search" type="search" list="dest-list" autocomplete="off"
-               placeholder="Search a room or place, e.g. 4309, lab" aria-label="Search destination" />
-        <datalist id="dest-list"></datalist>
-      </label>
+      <!-- Two search fields (like Google Maps). The hidden selects below hold the chosen values. -->
       <div class="field-stack">
         <div class="field">
           <span class="dot dot-start" aria-hidden="true"></span>
-          <select id="start-select" aria-label="Start location">
-        <option value="" selected>Start: my location (GPS)</option>
-        <option value="gps">My current location</option>
-        <option value="pinned">Pinned on Map</option>
-        <option value="MainGate">Main Gate</option>
-        <option value="ExitGate">Exit Gate</option>
-        <option value="Library">Library</option>
-        <option value="Auditorium">Auditorium</option>
-        <option value="MainCanteen">Main Canteen</option>
-        <option value="Parking">Parking</option>
-          </select>
+          <input id="start-search" type="search" list="start-list" autocomplete="off"
+                 placeholder="From: my location (GPS)" aria-label="Start: a room or place; leave empty for my location" />
+          <datalist id="start-list"></datalist>
         </div>
         <div class="field">
           <span class="dot dot-end" aria-hidden="true"></span>
-          <select id="end-select" aria-label="Destination">
-        <option value="" disabled selected>Choose a room or place</option>
-        <option value="pinned">Pinned on Map</option>
-        <optgroup id="aiml-rooms" label="AIML Building 4 (rooms)"></optgroup>
-        <optgroup label="Campus">
-          <option value="MainGate">Main Gate</option>
-          <option value="Library">Library</option>
-          <option value="Auditorium">Auditorium</option>
-          <option value="MainCanteen">Main Canteen</option>
-          <option value="Parking">Parking</option>
-        </optgroup>
-          </select>
+          <input id="dest-search" type="search" list="dest-list" autocomplete="off"
+                 placeholder="To: a room or place, e.g. 4309, lab" aria-label="Destination: a room or place" />
+          <datalist id="dest-list"></datalist>
         </div>
+      </div>
+      <div hidden>
+        <select id="start-select" aria-hidden="true" tabindex="-1">
+          <option value="" selected>My location (GPS)</option>
+          <option value="gps">My current location</option>
+          <option value="pinned">Pinned on Map</option>
+          <optgroup id="start-rooms" label="AIML Building 4 (rooms)"></optgroup>
+          <optgroup label="Campus">
+            <option value="MainGate">Main Gate</option>
+            <option value="ExitGate">Exit Gate</option>
+            <option value="Library">Library</option>
+            <option value="Auditorium">Auditorium</option>
+            <option value="MainCanteen">Main Canteen</option>
+            <option value="Parking">Parking</option>
+          </optgroup>
+        </select>
+        <select id="end-select" aria-hidden="true" tabindex="-1">
+          <option value="" disabled selected>Choose a room or place</option>
+          <option value="pinned">Pinned on Map</option>
+          <optgroup id="aiml-rooms" label="AIML Building 4 (rooms)"></optgroup>
+          <optgroup label="Campus">
+            <option value="MainGate">Main Gate</option>
+            <option value="Library">Library</option>
+            <option value="Auditorium">Auditorium</option>
+            <option value="MainCanteen">Main Canteen</option>
+            <option value="Parking">Parking</option>
+          </optgroup>
+        </select>
       </div>
 
       <div class="chips">
