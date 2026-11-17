@@ -623,14 +623,14 @@
   const interiorFloors = {};
   const CORRIDOR_W = 3.0, WALL_H = 3.2, DADO_H = 1.0;
 
-  function makeTileTexture(w, h) {
+  // Ground floor: slate-grey tiles, light grout. Upper floors: glossy cream tiles (photos).
+  function makeTileTexture(w, h, upper) {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d');
-    // Slate-grey tiles with light grout, like the AIML ground-floor photos
-    g.fillStyle = '#8f969c'; g.fillRect(0, 0, 64, 64);
-    g.fillStyle = '#858c92'; g.fillRect(0, 0, 32, 32); g.fillRect(32, 32, 32, 32);
-    g.strokeStyle = '#c9cdd0'; g.lineWidth = 2; g.strokeRect(0, 0, 64, 64);
+    g.fillStyle = upper ? '#ece5d6' : '#8f969c'; g.fillRect(0, 0, 64, 64);
+    g.fillStyle = upper ? '#e4dccb' : '#858c92'; g.fillRect(0, 0, 32, 32); g.fillRect(32, 32, 32, 32);
+    g.strokeStyle = upper ? '#d3cab7' : '#c9cdd0'; g.lineWidth = 2; g.strokeRect(0, 0, 64, 64);
     g.beginPath(); g.moveTo(32, 0); g.lineTo(32, 64); g.moveTo(0, 32); g.lineTo(64, 32); g.stroke();
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -660,6 +660,7 @@
     stone: new THREE.MeshLambertMaterial({ color: 0xbab6ad }),
     steel: new THREE.MeshLambertMaterial({ color: 0x9aa3ab }),
     board: new THREE.MeshLambertMaterial({ color: 0x7a1f2b }),
+    terracotta: new THREE.MeshLambertMaterial({ color: 0xa5533a }),
     frame: new THREE.MeshLambertMaterial({ color: 0xd8d2c4 }),
     red: new THREE.MeshLambertMaterial({ color: 0xd62828 }),
     bench: new THREE.MeshLambertMaterial({ color: 0x3f5f4f }),
@@ -672,9 +673,12 @@
     '4003': '4003 · Liquid Galaxy Lab',
     AIML_COE_AI: 'Center of Excellence in AI',
     AIML_OFFICE: 'AIML Office',
-    AIML_HOD_OFFICE: 'HOD Office'
+    '4303': '4303 · AIML Dept. Office',
+    '4305': '4305 · Staff Room',
+    '4307': '4307 · UG Class Room 1',
+    '4308': '4308 · Programming Lab'
   };
-  const WIDE_DOORS = new Set(['4003', 'AIML_COE_AI']); // double doors on the labs
+  const WIDE_DOORS = new Set(['4003', 'AIML_COE_AI', '4307', '4308']); // double doors on labs/classrooms
 
   // Axis-aligned box from min/max corners (local metres: x east, y north, z up).
   function box(group, mat, x0, x1, y0, y1, z0, z1) {
@@ -713,12 +717,17 @@
 
       // Tiled corridor floors
       const longFloor = new THREE.Mesh(new THREE.PlaneGeometry(CORRIDOR_W, corner + half),
-        new THREE.MeshLambertMaterial({ map: makeTileTexture(CORRIDOR_W, corner + half) }));
+        new THREE.MeshLambertMaterial({ map: makeTileTexture(CORRIDOR_W, corner + half, f > 0) }));
       longFloor.position.set(cx, -(corner + half) / 2, z + 0.02);
       const shortFloor = new THREE.Mesh(new THREE.PlaneGeometry(innerX - westX, CORRIDOR_W),
-        new THREE.MeshLambertMaterial({ map: makeTileTexture(innerX - westX, CORRIDOR_W) }));
+        new THREE.MeshLambertMaterial({ map: makeTileTexture(innerX - westX, CORRIDOR_W, f > 0) }));
       shortFloor.position.set((innerX + westX) / 2, -corner, z + 0.02);
       g.add(longFloor, shortFloor);
+      // Upper floors: terracotta squares down the middle of the corridor
+      if (f > 0) {
+        for (let a = 1.5; a < corner; a += 2) box(g, MAT.terracotta, cx - 0.35, cx + 0.35, -a - 0.35, -a + 0.35, z + 0.02, z + 0.03);
+        for (let w = 2; w < L.westEnd; w += 2) box(g, MAT.terracotta, cx - w - 0.35, cx - w + 0.35, -corner - 0.35, -corner + 0.35, z + 0.02, z + 0.03);
+      }
 
       // Room-side walls (with a gap for the stair hall), window walls, end walls
       wall(g, outerX, outerX + T, 0, -(sa - 2.5), z, false);
@@ -728,7 +737,7 @@
       wall(g, innerX, westX, northY, northY + T, z, true);
       wall(g, westX - T, westX, northY, southY, z, false);
       if (f === 0) box(g, MAT.glass, innerX, outerX, 0, 0.1, z, z + 2.6);      // Entrance 2 glass doors
-      else wall(g, innerX, outerX, 0, 0.1, z, true);
+      else wall(g, innerX, outerX, 0, 0.1, z, false);                         // end wall: 4x01, 4x02, water
 
       // Doors + room signs on the outer walls
       const door = (x, y, alongX, id) => {
@@ -742,6 +751,22 @@
       };
       F.longArm.forEach(([id, pos]) => door(outerX, -pos, true, id));
       F.shortArm.forEach(([id, pos]) => door(cx - pos, southY, false, id));
+
+      // North end wall (floors 1-3): two doors with the drinking-water cooler between them
+      (F.endWall || []).forEach(([id, east]) => {
+        const x = cx + east;
+        box(g, MAT.door, x - 0.42, x + 0.42, -0.03, 0, z, z + 2.1);
+        const s = makeSign(id);
+        s.position.set(x, -0.1, z + 2.45);
+        g.add(s);
+      });
+      if ((F.endWall || []).length) {
+        box(g, MAT.steel, cx - 0.4, cx + 0.4, -0.55, -0.02, z, z + 1.1);          // water cooler
+        const w = makeSign('Drinking Water');
+        w.position.set(cx, -0.15, z + 1.9);
+        w.scale.multiplyScalar(0.6);
+        g.add(w);
+      }
 
       // Maroon notice boards midway between neighbouring doors on the room wall
       const longPos = F.longArm.map(([, p]) => p).sort((a, b) => a - b);

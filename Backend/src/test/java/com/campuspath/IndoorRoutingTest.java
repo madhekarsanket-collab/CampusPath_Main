@@ -34,6 +34,21 @@ class IndoorRoutingTest {
     }
 
     @Test
+    void everyUpperFloorHasTheSameRoomsWithItsOwnNumbers() {
+        for (int f = 1; f <= 3; f++) {
+            for (String r : new String[]{"01", "02", "03", "04", "04-B", "05", "06", "07", "08", "09"}) {
+                Node room = graph.getNode("4" + f + r);
+                assertNotNull(room, "missing room 4" + f + r);
+                assertEquals((double) f, room.getFloor());
+            }
+        }
+        // 4207 sits exactly below 4307
+        Node a = graph.getNode("4207"), b = graph.getNode("4307");
+        assertEquals(a.getLatitude(), b.getLatitude(), 1e-12);
+        assertEquals(a.getLongitude(), b.getLongitude(), 1e-12);
+    }
+
+    @Test
     void groundFloorRoomStaysOnGroundFloor() {
         List<Node> path = service.route("MainGate", "4003", false, "1000").path();
         assertTrue(path.stream().allMatch(n -> n.getFloor() == null || n.getFloor() == 0));

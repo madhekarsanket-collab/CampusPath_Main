@@ -71,11 +71,18 @@ public final class AimlIndoorGraph {
                 new Slot("AIML_WASHROOM_M_0", 5), new Slot("AIML_OFFICE", 12.5),
                 new Slot("4003", 17.5), new Slot("4004", 22.5), new Slot("4005", 34),
                 new Slot("AIML_COE_AI", 38.5)); // Center of Excellence in AI, faces Entrance 1
-        List<Slot> s = new ArrayList<>(List.of(
-                new Slot("AIML_WASHROOM_M_" + f, 6),
-                new Slot("4" + f + "04", 19), new Slot("4" + f + "05", 32), new Slot("4" + f + "06", 37)));
-        if (f == 3) s.add(new Slot("AIML_HOD_OFFICE", 11.5));
-        return s;
+        // Floors 1-3 share one layout; on floor 3, 4303 is the AIML department office (HOD).
+        return List.of(
+                new Slot("AIML_WASHROOM_M_" + f, 6), new Slot("4" + f + "03", 11.5),
+                new Slot("4" + f + "04", 19), new Slot("4" + f + "04-B", 21),
+                new Slot("4" + f + "05", 32), new Slot("4" + f + "06", 37));
+    }
+
+    // Doors on the north end wall (floors 1-3), either side of the drinking-water point.
+    // pos = metres east of the corridor centre line.
+    private static List<Slot> endWall(int f) {
+        if (f == 0) return List.of(); // Entrance 2 is there on the ground floor
+        return List.of(new Slot("4" + f + "01", 0.95), new Slot("4" + f + "02", -0.95));
     }
 
     private static List<Slot> shortArm(int f) {
@@ -114,6 +121,10 @@ public final class AimlIndoorGraph {
             addNode(g, s.id(), CORRIDOR_EAST - s.pos(), -CORNER_ALONG - DOOR_OFFSET, f);
             edge(g, s.id(), westNode(f, s.pos()), DOOR_OFFSET);
         }
+        for (Slot s : endWall(f)) {
+            addNode(g, s.id(), CORRIDOR_EAST + s.pos(), 0.5, f);
+            edge(g, s.id(), spine(f, 0), 1.0);
+        }
         // Foot of the stairs, off the corridor on the east side.
         addNode(g, stairs(f), STAIR_FOOT_EAST, -STAIRS_ALONG, f);
         edge(g, stairs(f), spine(f, STAIRS_ALONG), STAIR_FOOT_EAST - CORRIDOR_EAST);
@@ -125,7 +136,8 @@ public final class AimlIndoorGraph {
         for (int f = 0; f <= 3; f++) {
             floors.put(String.valueOf(f), java.util.Map.of(
                     "longArm", longArm(f).stream().map(s -> List.of(s.id(), s.pos())).toList(),
-                    "shortArm", shortArm(f).stream().map(s -> List.of(s.id(), s.pos())).toList()));
+                    "shortArm", shortArm(f).stream().map(s -> List.of(s.id(), s.pos())).toList(),
+                    "endWall", endWall(f).stream().map(s -> List.of(s.id(), s.pos())).toList()));
         }
         return java.util.Map.ofEntries(
                 java.util.Map.entry("origin", List.of(E2_LNG, E2_LAT)),

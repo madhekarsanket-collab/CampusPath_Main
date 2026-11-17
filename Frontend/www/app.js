@@ -8,13 +8,21 @@ mapboxgl.accessToken = 'pk.eyJ1Ijoic2FuNDA0MGciLCJhIjoiY211bjFrY2l0MDV6bTJ6czl3N
 const API_BASE = 'http://localhost:8080';
 const BACKEND_URL = `${API_BASE}/api/route`;
 
-// AIML rooms = backend node ids (Backend AimlIndoorGraph). Same layout on every floor.
+// Named rooms (from the signboards in the user's floor-3 photos).
+const ROOM_NAMES = {
+  '4303': 'AIML Dept. Office (HOD)', '4305': 'Staff Room',
+  '4307': 'UG Class Room 1', '4308': 'Programming Lab'
+};
+
+// AIML rooms = backend node ids (Backend AimlIndoorGraph). Floors 1-3 share one layout.
 const AIML_ROOMS = [
   ['4003', '4003 – Liquid Galaxy Lab (Ground)'], ['4004', '4004 (Ground)'], ['4005', '4005 (Ground)'],
   ['4006', '4006 (Ground)'], ['4007', '4007 (Ground)'], ['4008', '4008 (Ground)'], ['AIML_OFFICE', 'AIML Office (Ground)'],
   ['AIML_COE_AI', 'Center of Excellence in AI (Ground)'],
-  ...[1, 2, 3].flatMap(f => ['04', '05', '06', '07', '08', '09'].map(r => [`4${f}${r}`, `${4}${f}${r} (Floor ${f})`])),
-  ['AIML_HOD_OFFICE', 'HOD Office (Floor 3)'],
+  ...[1, 2, 3].flatMap(f => ['01', '02', '03', '04', '04-B', '05', '06', '07', '08', '09'].map(r => {
+    const id = `4${f}${r}`;
+    return [id, `${id}${ROOM_NAMES[id] ? ' – ' + ROOM_NAMES[id] : ''} (Floor ${f})`];
+  })),
 ];
 const AIML_ENTRANCES = { AIML_E1: [73.867780, 18.463487], AIML_E2: [73.867834, 18.463828] };
 const AIML_OSM_BUILDING_ID = 223964767; // Mapbox building feature id of the real AIML block
