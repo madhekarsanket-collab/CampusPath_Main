@@ -419,6 +419,11 @@
     .toast { position: absolute; z-index: 30; left: 50%; transform: translateX(-50%); bottom: calc(64vh + 8px);
       max-width: calc(100% - 32px); background: var(--fg); color: #fff; padding: 12px 16px; border-radius: 12px;
       font-size: 14px; box-shadow: var(--shadow); }
+    .recenter-btn { position: absolute; z-index: 22; right: 12px; top: calc(68px + var(--safe-t)); display: inline-flex; align-items: center; gap: 8px;
+      min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--surface); color: var(--primary);
+      font: inherit; font-size: 15px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
+    .recenter-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+    .sheet[data-state="nav"] ~ .recenter-btn, body:has(.sheet[data-state="nav"]) .recenter-btn { top: calc(130px + var(--safe-t)); }
     .dev-toggle { position: absolute; z-index: 15; top: calc(12px + var(--safe-t)); right: 12px; background: var(--surface); box-shadow: var(--shadow); }
     #dev-panel { top: 64px; }
 
@@ -444,6 +449,11 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <button id="recenter-btn" class="recenter-btn" type="button" hidden aria-label="Re-centre the map">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg>
+    <span>Re-centre</span>
+  </button>
 
   <button id="dev-toggle" class="icon-btn dev-toggle" type="button" aria-label="3D calibration tools" aria-expanded="false">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
