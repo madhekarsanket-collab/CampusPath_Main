@@ -213,6 +213,25 @@ findPathBtn.addEventListener('click', async () => {
   };
   if (isPlace(startSelect.value)) payload.startNode = startSelect.value;
   else if (startCoords) payload.start = { lng: startCoords[0], lat: startCoords[1] };
+  else {
+    // No start chosen: use where the phone actually is (asks for location permission once).
+    findPathBtn.disabled = true;
+    findPathBtn.textContent = 'Finding your location…';
+    try {
+      const p = await new Promise((ok, fail) => navigator.geolocation
+        ? navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: true, timeout: 12000 })
+        : fail(new Error('Location not available')));
+      setStartLocation([p.coords.longitude, p.coords.latitude], false);
+      startSelect.value = 'gps';
+      payload.start = { lng: p.coords.longitude, lat: p.coords.latitude };
+    } catch (err) {
+      alert('Could not get your location (' + err.message + '). Allow location access, or choose a start point.');
+      return;
+    } finally {
+      findPathBtn.disabled = false;
+      findPathBtn.textContent = 'Get directions';
+    }
+  }
   if (isPlace(endSelect.value)) payload.endNode = endSelect.value;
   else if (endCoords) payload.end = { lng: endCoords[0], lat: endCoords[1] };
 
