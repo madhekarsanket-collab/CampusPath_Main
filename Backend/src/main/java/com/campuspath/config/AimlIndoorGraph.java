@@ -69,8 +69,7 @@ public final class AimlIndoorGraph {
     private static List<Slot> longArm(int f) {
         if (f == 0) return List.of(
                 new Slot("AIML_WASHROOM_M_0", 5), new Slot("AIML_OFFICE", 12.5),
-                new Slot("4003", 17.5), new Slot("4004", 22.5), new Slot("4005", 34),
-                new Slot("AIML_COE_AI", 38.5)); // Center of Excellence in AI, faces Entrance 1
+                new Slot("4003", 17.5), new Slot("4004", 22.5), new Slot("4005", 38.5));
         // Floors 1-3 share one layout; on floor 3, 4303 is the AIML department office (HOD).
         return List.of(
                 new Slot("AIML_WASHROOM_M_" + f, 6), new Slot("4" + f + "03", 11.5),
@@ -87,7 +86,10 @@ public final class AimlIndoorGraph {
 
     private static List<Slot> shortArm(int f) {
         if (f == 0) return List.of(
-                new Slot("4006", 5), new Slot("4007", 13), new Slot("4008", 17), new Slot("AIML_WASHROOM_F_0", 20));
+                // 4006 is on the corner wall facing up the long corridor (west = 0);
+                // the Center of Excellence in AI faces Entrance 1 across the short arm.
+                new Slot("4006", 0), new Slot("AIML_COE_AI", 5), new Slot("4007", 13),
+                new Slot("4008", 17), new Slot("AIML_WASHROOM_F_0", 20));
         return List.of(new Slot("4" + f + "07", 5), new Slot("4" + f + "08", 12), new Slot("4" + f + "09", 19));
     }
 

@@ -43,7 +43,37 @@ const endSelect = document.getElementById('end-select');
 const findPathBtn = document.getElementById('find-path-btn');
 const navStartBtn = document.getElementById('nav-start-btn');
 const navSimBtn = document.getElementById('nav-sim-btn');
-const banner = document.getElementById('nav-banner');
+const sheet = document.getElementById('sheet');
+const navTop = document.getElementById('nav-top');
+const toastEl = document.getElementById('toast');
+
+// Bottom sheet has three steps: 'plan' (where to?) -> 'route' (summary) -> 'nav' (walking).
+function setSheet(state) {
+  sheet.dataset.state = state;
+  navTop.hidden = state !== 'nav';
+  navTop.classList.remove('arrived');
+}
+
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.hidden = true; }, 4500);
+}
+
+document.getElementById('route-close').addEventListener('click', () => resetNavigation());
+document.getElementById('nav-end-btn').addEventListener('click', () => {
+  stopNavigation();
+  setXray(false);
+  setSheet('route');
+  fitRoute();
+});
+document.getElementById('dev-toggle').addEventListener('click', e => {
+  const panel = document.getElementById('dev-panel');
+  panel.hidden = !panel.hidden;
+  e.currentTarget.setAttribute('aria-expanded', String(!panel.hidden));
+});
 const chkRain = document.getElementById('chk-rain');
 
 document.getElementById('aiml-rooms').innerHTML =
@@ -137,8 +167,7 @@ function resetNavigation() {
   clearRouteLayer();
   window.CampusPathAIML?.clearIndoorRoute?.();
   setXray(false);
-  banner.textContent = '';
-  navStartBtn.disabled = navSimBtn.disabled = true;
+  setSheet('plan');
 }
 
 function clearRouteLayer() {
@@ -159,9 +188,10 @@ async function loadWeather() {
     const code = cur.weather_code;
     const raining = cur.precipitation > 0 || (code >= 51 && code <= 67) || (code >= 80 && code <= 99);
     chkRain.checked = raining;
-    info.textContent = `${raining ? '🌧️ Raining now — rain-free path on' : '☀️ No rain now'} · ${cur.temperature_2m}°C`;
+    info.textContent = `${raining ? 'Raining' : 'No rain'} · ${Math.round(cur.temperature_2m)}°C`;
+    info.parentElement.classList.add(raining ? 'chip-warn' : 'chip-good');
   } catch {
-    info.textContent = 'Weather unavailable (offline). Toggle rain-free path manually.';
+    info.textContent = 'Weather offline';
   }
 }
 
@@ -208,8 +238,8 @@ findPathBtn.addEventListener('click', async () => {
     progressIdx = 0;
     renderRoute();
     fitRoute();
-    banner.textContent = describeRoute();
-    navStartBtn.disabled = navSimBtn.disabled = false;
+    renderRouteSheet();
+    setSheet('route');
   } catch (error) {
     console.error('Routing request failed:', error);
     alert(`Failed to find route: ${error.message}\n\nMake sure the Spring Boot server is running on port 8080 (and ADB reverse is set up on a phone).`);
@@ -253,29 +283,99 @@ function renderRoute() {
 function fitRoute() {
   const c = route.coords;
   const bounds = c.reduce((b, p) => b.extend(p), new mapboxgl.LngLatBounds(c[0], c[0]));
-  map.fitBounds(bounds, { padding: 80, duration: 1000 });
+  const wide = window.innerWidth >= 900; // keep the route clear of the side panel / bottom sheet
+  map.fitBounds(bounds, {
+    padding: wide ? { top: 60, bottom: 60, left: 420, right: 60 } : { top: 60, bottom: window.innerHeight * 0.5, left: 40, right: 40 },
+    duration: 1000
+  });
 }
 
-// Short human directions, built from the node ids the backend returns.
-function describeRoute() {
-  const { nodeIds, floors, props } = route;
-  const parts = [`${Math.round(props.distanceMeters)} m · ~${props.estimatedTimeMinutes} min`];
-  if (props.crowdDetour) parts.push('👥 Rerouted around a live crowd');
-  if (chkRain.checked) parts.push(`🌧️ ${props.coveredOutdoorMeters || 0} m of the outdoor walk under tree cover`);
+const destinationName = () =>
+  AIML_ROOMS.find(([id]) => id === route.props.destination)?.[1]
+  || endSelect.selectedOptions[0]?.textContent || route.props.destination;
+
+// Human directions, built from the node ids the backend returns.
+function routeSteps() {
+  const { nodeIds, floors } = route;
+  const steps = [];
   const entrance = nodeIds.find(id => id.startsWith('AIML_E'));
-  if (entrance) parts.push(`Enter AIML by ${entrance === 'AIML_E1' ? 'Entrance 1 (corner, near 4006/4007)' : 'Entrance 2 (north gate)'}`);
+  if (entrance) steps.push(`Walk to AIML ${entrance === 'AIML_E1' ? 'Entrance 1 (the corner gate)' : 'Entrance 2 (the north gate)'}`);
   const destFloor = floors[floors.length - 1];
   if (destFloor > 0) {
-    const viaLift = nodeIds.some(id => id.startsWith('AIML_LIFT'));
-    parts.push(viaLift
+    steps.push(nodeIds.some(id => id.startsWith('AIML_LIFT'))
       ? `Take the lift (it stops at the half-landings), then half a flight up to floor ${destFloor}`
       : `Take the zig-zag stairs up to floor ${destFloor}`);
   }
-  if (destFloor !== null && destFloor !== undefined) {
-    const name = AIML_ROOMS.find(([id]) => id === props.destination)?.[1] || props.destination;
-    parts.push(`Walk the corridor to ${name} (highlighted green)`);
+  steps.push(destFloor != null ? `Walk the corridor to ${destinationName()}` : `Arrive at ${destinationName()}`);
+  return steps;
+}
+
+function renderRouteSheet() {
+  const p = route.props;
+  document.getElementById('route-time').textContent = `${p.estimatedTimeMinutes} min`;
+  document.getElementById('route-dist').textContent = `${Math.round(p.distanceMeters)} m walk`;
+  const badges = [];
+  if (p.crowdDetour) badges.push(['chip-warn', 'Rerouted around a live crowd']);
+  if (chkRain.checked) badges.push(['chip-good', `${p.coveredOutdoorMeters || 0} m under tree cover`]);
+  document.getElementById('route-badges').innerHTML =
+    badges.map(([cls, text]) => `<span class="chip ${cls}">${text}</span>`).join('');
+  document.getElementById('route-steps').innerHTML = routeSteps().map(s => `<li>${s}</li>`).join('');
+}
+
+// Remaining walking distance from the walker to route vertex `toIdx`.
+function remainingTo(toIdx) {
+  const c = route.coords;
+  let d = metersBetween(userPos || c[progressIdx], c[Math.min(progressIdx + 1, c.length - 1)]);
+  for (let i = progressIdx + 1; i < toIdx; i++) d += metersBetween(c[i], c[i + 1]);
+  return Math.max(0, Math.round(d));
+}
+
+// The big instruction card at the top while navigating.
+function updateNavTop() {
+  if (!route) return;
+  const last = route.coords.length - 1;
+  const firstIndoor = route.floors.findIndex(f => f != null);
+  let main, target = last;
+  if (firstIndoor > 0 && progressIdx < firstIndoor - 1) {
+    target = firstIndoor - 1;
+    main = `Walk to ${route.nodeIds[target] === 'AIML_E1' ? 'Entrance 1' : 'Entrance 2'}`;
+  } else {
+    const cp = nextCheckpoint();
+    if (cp) {
+      target = cp.i;
+      main = cp.label === 'Destination door' ? `${destinationName()} is ahead`
+        : cp.label.startsWith('Floor') ? `Climb to ${cp.label.replace(' (top of stairs)', '')}`
+        : cp.label === 'Foot of the stairs' ? 'Go to the stairs'
+        : cp.label.startsWith('Stair landing') ? 'Climb to the landing'
+        : cp.label === 'Corridor corner' ? 'Turn at the corridor corner' : cp.label;
+    } else {
+      main = `Head to ${destinationName()}`;
+    }
   }
-  return parts.join(' → ');
+  document.getElementById('nav-top-main').textContent = main;
+  document.getElementById('nav-top-sub').textContent = `${remainingTo(target)} m`;
+  const total = remainingTo(last);
+  const eta = new Date(Date.now() + Math.ceil(total / 84) * 60000);
+  document.getElementById('nav-eta').textContent = `${Math.max(1, Math.ceil(total / 84))} min`;
+  if (!indoorMode) document.getElementById('step-info').textContent =
+    `${total} m · arrive ${eta.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function startNavUi() {
+  document.getElementById('nav-end-btn').textContent = 'End';
+  setSheet('nav');
+  userPos = route.coords[0];
+  progressIdx = 0;
+  updateNavTop();
+}
+
+function showArrived() {
+  navTop.hidden = false;
+  navTop.classList.add('arrived');
+  document.getElementById('nav-top-main').textContent = 'You have arrived';
+  document.getElementById('nav-top-sub').textContent = destinationName();
+  document.getElementById('nav-eta').textContent = 'Arrived';
+  document.getElementById('nav-end-btn').textContent = 'Done';
 }
 
 // ==========================================
@@ -372,10 +472,12 @@ function updateUserPosition(pos, simIdx, simFloor) {
   window.CampusPathAIML?.setUserPosition?.(inside ? pos : null, floor);
   userMarker.getElement().style.display = inside ? 'none' : '';
   followCamera(pos, inside ? floor : null, simIdx === undefined);
+  updateNavTop();
 
   if (progressIdx >= route.coords.length - 1) {
-    banner.textContent = '✅ You have arrived!';
     stopNavigation();
+    showArrived();
+    return;
   }
 }
 
@@ -431,7 +533,7 @@ function advanceIndoor(meters) {
   walkedM = Math.min(walkedM + meters, cumDist[cumDist.length - 1]);
   const p = positionAtDistance(walkedM);
   updateUserPosition(p.pos, p.idx, p.floor);
-  stepInfo.textContent = indoorMode ? `👣 ${stepCount} steps · indoor positioning by step count` : '';
+  if (indoorMode) stepInfo.textContent = `Indoor mode · ${stepCount} steps counted`;
 }
 
 let lastMag = 9.8, lastStepAt = 0, aboveThreshold = false;
@@ -496,7 +598,7 @@ function nextCheckpoint() {
 function updateCheckpointButton() {
   const cp = indoorMode ? nextCheckpoint() : null;
   checkpointBtn.hidden = !cp;
-  if (cp) checkpointBtn.textContent = `📍 I'm at: ${cp.label}`;
+  if (cp) checkpointBtn.textContent = `I'm at: ${cp.label}`;
 }
 
 checkpointBtn.addEventListener('click', () => {
@@ -529,15 +631,24 @@ function pingCrowd(pos) {
 
 function initCrowdLayer() {
   map.addSource('crowd', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  // Soft heatmap: separate phones blend into one warm glow that grows with density.
   map.addLayer({
-    id: 'crowd-dots', type: 'circle', source: 'crowd',
-    paint: { 'circle-radius': 14, 'circle-color': '#ef4444', 'circle-opacity': 0.35, 'circle-blur': 0.6 }
+    id: 'crowd-heat', type: 'heatmap', source: 'crowd',
+    paint: {
+      'heatmap-weight': 1,
+      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 15, 0.6, 19, 1.2],
+      'heatmap-radius': ['interpolate', ['exponential', 2], ['zoom'], 15, 12, 19, 60, 21, 160],
+      'heatmap-opacity': 0.75,
+      'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(255,255,255,0)', 0.2, 'rgba(253,224,71,0.35)', 0.5, 'rgba(251,146,60,0.6)',
+        0.8, 'rgba(239,68,68,0.75)', 1, 'rgba(190,18,60,0.85)']
+    }
   });
   const crowdInfo = document.getElementById('crowd-info');
   const refresh = async () => {
     try {
       const pts = await (await fetch(`${API_BASE}/api/crowd`)).json();
-      crowdInfo.textContent = `👥 Live crowd: ${pts.length} ${pts.length === 1 ? 'phone' : 'phones'} navigating on campus right now`;
+      crowdInfo.textContent = `${pts.length} ${pts.length === 1 ? 'person' : 'people'} on the move`;
       map.getSource('crowd').setData({
         type: 'FeatureCollection',
         features: pts.map(c => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: c } }))
@@ -555,7 +666,7 @@ function initCrowdLayer() {
       body: JSON.stringify({ deviceId: `demo-${i}`, lng: lng + (i % 3) * 0.00002, lat: lat + Math.floor(i / 3) * 0.00002 })
     }).catch(() => {})));
     await refresh();
-    banner.textContent = '🧪 6 test phones placed at Entrance 2 for 2 minutes. Press Find Path again to see the route avoid them.';
+    toast('Demo: 6 test phones placed at Entrance 2 for 2 minutes. Get directions again to see the route avoid them.');
   });
 }
 
@@ -563,6 +674,7 @@ navStartBtn.addEventListener('click', () => {
   if (!navigator.geolocation) return alert('Location is not available on this device.');
   stopNavigation();
   camBearing = null;
+  startNavUi();
   gpsWatchId = navigator.geolocation.watchPosition(
     p => {
       const pos = [p.coords.longitude, p.coords.latitude];
@@ -587,6 +699,7 @@ navSimBtn.addEventListener('click', () => {
   setXray(false);
   progressIdx = 0;
   camBearing = null;
+  startNavUi();
   let seg = 0, t = 0;
   const tickMs = 100;
   simTimer = setInterval(() => {
