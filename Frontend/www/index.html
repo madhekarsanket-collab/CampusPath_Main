@@ -334,6 +334,11 @@
     .sheet[data-state="plan"] .state-plan, .sheet[data-state="route"] .state-route, .sheet[data-state="nav"] .state-nav { display: block; }
     .sheet[data-state="nav"] .brand, .sheet[data-state="nav"] .sheet-handle { display: none; }
 
+    .search { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 14px; margin-bottom: 10px;
+      border-radius: 14px; background: var(--surface-2); color: var(--muted); }
+    .search:focus-within { outline: 3px solid #93c5fd; }
+    .search input { flex: 1; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--fg); outline: none; min-height: 48px; }
+    #voice-btn[aria-pressed="false"] .voice-wave { opacity: .15; }
     .field-stack { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
     .field { display: flex; align-items: center; gap: 12px; padding: 0 14px; min-height: 52px; background: var(--surface); }
     .field + .field { border-top: 1px solid var(--border); }
@@ -434,6 +439,12 @@
     <!-- 1. PLAN -->
     <div class="state state-plan">
       <h1 class="title">Where to?</h1>
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="dest-search" type="search" list="dest-list" autocomplete="off"
+               placeholder="Search a room or place, e.g. 4309, lab" aria-label="Search destination" />
+        <datalist id="dest-list"></datalist>
+      </label>
       <div class="field-stack">
         <div class="field">
           <span class="dot dot-start" aria-hidden="true"></span>
@@ -506,6 +517,8 @@
         </button>
         <button id="nav-sim-btn" class="btn btn-secondary" type="button">Preview walk</button>
       </div>
+      <button id="astar-btn" class="btn-link" type="button">Show how A* searched for this route</button>
+      <p id="astar-info" class="hint" hidden></p>
     </div>
 
     <!-- 3. NAVIGATING -->
@@ -515,7 +528,12 @@
           <div id="nav-eta" class="big-num"></div>
           <div id="step-info" class="muted"></div>
         </div>
-        <button id="nav-end-btn" class="btn btn-danger" type="button">End</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="voice-btn" class="icon-btn" type="button" aria-label="Voice directions on" aria-pressed="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path class="voice-wave" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+          </button>
+          <button id="nav-end-btn" class="btn btn-danger" type="button">End</button>
+        </div>
       </div>
       <button id="nav-checkpoint-btn" class="btn btn-secondary" type="button" hidden></button>
     </div>
@@ -694,6 +712,7 @@
   <div id="map"></div>
 
   <!-- Scripts -->
+  <script src="offline.js"></script>
   <script src="app.js"></script>
   <script src="aiml-model.js"></script>
 </body>

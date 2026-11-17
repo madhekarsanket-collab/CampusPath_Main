@@ -42,7 +42,8 @@ public class RouteService {
         Node end = resolveNode(endInput);
 
         var live = crowd.snapshot();
-        List<Node> path = aStar.findPath(start, end, rain, time, avoidCrowds, live);
+        List<Node> explored = new ArrayList<>();
+        List<Node> path = aStar.findPath(start, end, rain, time, avoidCrowds, live, explored);
 
         if (path.isEmpty()) {
             throw new IllegalArgumentException(
@@ -58,7 +59,7 @@ public class RouteService {
             crowdDetour = !ignoringLive.equals(path);
         }
 
-        return new RouteResult(path, distance, estimateMinutes(distance), crowdDetour, coveredOutdoorMeters(path));
+        return new RouteResult(path, distance, estimateMinutes(distance), crowdDetour, coveredOutdoorMeters(path), explored);
     }
 
     private double coveredOutdoorMeters(List<Node> path) {
@@ -143,5 +144,6 @@ public class RouteService {
                               double distanceMeters,
                               int estimatedTimeMinutes,
                               boolean crowdDetour,
-                              double coveredOutdoorMeters) {}
+                              double coveredOutdoorMeters,
+                              List<Node> explored) {}
 }

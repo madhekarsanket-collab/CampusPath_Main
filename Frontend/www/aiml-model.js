@@ -826,12 +826,16 @@
   }
 
   async function loadInterior(apiBase) {
+    const KEY = 'cp_layout_v1'; // cached so the interior also works offline
+    let L = null;
     try {
-      const L = await (await fetch(`${apiBase}/api/buildings/aiml/layout`)).json();
-      buildInterior(L);
+      L = await (await fetch(`${apiBase}/api/buildings/aiml/layout`)).json();
+      try { localStorage.setItem(KEY, JSON.stringify(L)); } catch { /* not cached */ }
     } catch (e) {
-      console.warn('[AIML-3D] Interior layout unavailable:', e);
+      try { L = JSON.parse(localStorage.getItem(KEY)); } catch { L = null; }
+      if (!L) console.warn('[AIML-3D] Interior layout unavailable:', e);
     }
+    if (L) buildInterior(L);
   }
 
   // floor: null = outside (show the GLB building), number = show that floor's interior only.

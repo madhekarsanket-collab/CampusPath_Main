@@ -49,6 +49,17 @@ class IndoorRoutingTest {
     }
 
     @Test
+    void everyCampusPlaceReachesEveryKindOfAimlRoom() {
+        String[] places = {"MainGate", "ExitGate", "Parking", "Library", "Auditorium", "MainCanteen", "AIML"};
+        String[] rooms = {"4003", "4006", "AIML_COE_AI", "AIML_WASHROOM_F_0", "4101", "4204-B", "4309"};
+        for (String p : places) {
+            for (String r : rooms) {
+                assertFalse(service.route(p, r, false, "1000").path().isEmpty(), p + " -> " + r);
+            }
+        }
+    }
+
+    @Test
     void groundFloorRoomStaysOnGroundFloor() {
         List<Node> path = service.route("MainGate", "4003", false, "1000").path();
         assertTrue(path.stream().allMatch(n -> n.getFloor() == null || n.getFloor() == 0));

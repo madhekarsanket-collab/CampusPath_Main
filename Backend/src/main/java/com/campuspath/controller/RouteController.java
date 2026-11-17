@@ -105,6 +105,10 @@ public class RouteController {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("floors", floors);
         properties.put("crowdDetour", result.crowdDetour());
+        // Nodes in the order A* settled them (for the "how A* searched" animation)
+        properties.put("explored", result.explored().stream()
+                .map(n -> List.of(n.getLongitude(), n.getLatitude(), n.getFloor() == null ? -1.0 : n.getFloor()))
+                .toList());
         properties.put("coveredOutdoorMeters", Math.round(result.coveredOutdoorMeters()));
         properties.put("nodeIds", result.path().stream().map(Node::getId).toList());
         properties.put("destination", result.path().get(result.path().size() - 1).getId());

@@ -180,12 +180,55 @@ public class CampusGraphConfig {
             addFallbackIfMissing(graph, "Parking", 73.86814, 18.46351);
 
             AimlIndoorGraph.addTo(graph);
+            stitchIslands(graph, 40.0);
             markCrowdHotspots(graph);
 
             return graph;
 
         } catch (IOException e) {
             throw new IllegalStateException("CRITICAL ERROR: Failed to parse coordinates.geojson", e);
+        }
+    }
+
+    /**
+     * BFS the walkable graph into connected components (virtual building nodes don't join
+     * paths) and link every island to the main network at its closest point, if within maxGapM.
+     * Fixes digitising gaps such as the Parking stub that only touched the virtual AIML node.
+     */
+    private void stitchIslands(Graph graph, double maxGapM) {
+        java.util.Map<Node, Integer> comp = new java.util.HashMap<>();
+        java.util.List<java.util.List<Node>> comps = new java.util.ArrayList<>();
+        for (Node start : graph.getNodes()) {
+            if (start.isVirtual() || comp.containsKey(start)) continue;
+            java.util.List<Node> members = new java.util.ArrayList<>();
+            java.util.ArrayDeque<Node> queue = new java.util.ArrayDeque<>(java.util.List.of(start));
+            comp.put(start, comps.size());
+            while (!queue.isEmpty()) {
+                Node cur = queue.poll();
+                members.add(cur);
+                for (com.campuspath.model.Edge e : cur.getEdges()) {
+                    Node nb = e.getTo();
+                    if (nb.isVirtual() || comp.containsKey(nb)) continue;
+                    comp.put(nb, comps.size());
+                    queue.add(nb);
+                }
+            }
+            comps.add(members);
+        }
+        java.util.List<Node> main = comps.stream().max(java.util.Comparator.comparingInt(java.util.List::size)).orElseThrow();
+        for (java.util.List<Node> island : comps) {
+            if (island == main) continue;
+            Node bestA = null, bestB = null;
+            double bestD = maxGapM;
+            for (Node a : island) {
+                if (a.isIndoor()) continue;
+                for (Node b : main) {
+                    if (b.isIndoor()) continue;
+                    double d = Haversine.distance(a.getLatitude(), a.getLongitude(), b.getLatitude(), b.getLongitude());
+                    if (d < bestD) { bestD = d; bestA = a; bestB = b; }
+                }
+            }
+            if (bestA != null) graph.addBidirectionalEdge(bestA.getId(), bestB.getId(), bestD, false, 1.0);
         }
     }
 
