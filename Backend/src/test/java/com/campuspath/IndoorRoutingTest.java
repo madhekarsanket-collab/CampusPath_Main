@@ -41,6 +41,15 @@ class IndoorRoutingTest {
     }
 
     @Test
+    void outdoorTripsNeverCutThroughTheBuilding() {
+        for (String from : new String[]{"MainGate", "73.867834,18.463840"}) {
+            var path = service.route(from, "MainCanteen", false, "1000").path();
+            assertFalse(path.isEmpty());
+            assertTrue(path.stream().noneMatch(Node::isIndoor), from + " went through AIML");
+        }
+    }
+
+    @Test
     void everyUpperFloorHasTheSameRoomsWithItsOwnNumbers() {
         for (int f = 1; f <= 3; f++) {
             for (String r : new String[]{"01", "02", "03", "04", "04-B", "05", "06", "07", "08", "09"}) {
