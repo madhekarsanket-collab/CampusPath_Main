@@ -150,6 +150,7 @@ map.on('load', () => {
 // ==========================================
 map.on('click', (e) => {
   if (window.aimlPlacementMode) return; // AIML anchor calibration in progress
+  if (editing) return addEditPoint([e.lngLat.lng, e.lngLat.lat]);
   if (sheet.dataset.state === 'nav') return; // taps while walking must not move the pins
   const coords = [e.lngLat.lng, e.lngLat.lat];
   clickCount++;
@@ -838,17 +839,50 @@ navStartBtn.addEventListener('click', () => {
       const pos = [p.coords.longitude, p.coords.latitude];
       pingCrowd(pos);
       if (indoorMode) return; // indoors the step counter drives the position
+      if (offRoute(pos)) return;
       updateUserPosition(pos);
       // Reached the entrance: hand over from GPS to step counting.
       const firstIndoor = route.floors.findIndex(f => f !== null && f !== undefined);
       if (firstIndoor > 0 && progressIdx >= firstIndoor - 1
-          && metersBetween(pos, route.coords[firstIndoor - 1]) < 8) {
+          && metersBetween(pos, route.coords[firstIndoor - 1]) < 15) {
         startPedometer(firstIndoor - 1);
       }
     },
     err => alert('GPS error: ' + err.message),
-    { enableHighAccuracy: true, maximumAge: 2000 });
+    { enableHighAccuracy: true, maximumAge: 0 });
 });
+
+// Walked away from the line (another path)? Plan again from here, like Google Maps.
+const OFF_ROUTE_M = 25;
+let offCount = 0, rerouting = false;
+function offRoute(pos) {
+  if (rerouting) return true;
+  let d = Infinity;
+  for (let i = progressIdx; i < route.coords.length - 1; i++) {
+    if (route.floors[i] != null) break; // only the outdoor part: GPS can't judge indoors
+    d = Math.min(d, distToSegment(pos, route.coords[i], route.coords[i + 1]));
+  }
+  offCount = d > OFF_ROUTE_M ? offCount + 1 : 0;
+  if (offCount < 2) return false; // two fixes in a row: one bad GPS jump shouldn't reroute
+  offCount = 0;
+  rerouting = true;
+  const payload = { ...lastPayload, startNode: undefined, start: { lng: pos[0], lat: pos[1] } };
+  fetch(BACKEND_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .catch(() => window.CampusOffline.route(payload))
+    .then(data => {
+      lastPayload = payload;
+      route = { coords: data.geometry.coordinates,
+        floors: data.properties.floors || data.geometry.coordinates.map(() => null),
+        nodeIds: data.properties.nodeIds || [], props: data.properties };
+      progressIdx = 0;
+      toast('New route from where you are');
+      updateUserPosition(pos);
+    })
+    .catch(() => {})
+    .finally(() => { rerouting = false; });
+  return true;
+}
 
 // Walks the route at SIM_SPEEDUP × walking speed: lets you demo the whole trip on a desktop.
 navSimBtn.addEventListener('click', () => {
@@ -1101,3 +1135,62 @@ themeBtn.addEventListener('click', () => {
 });
 applyTheme();
 map.on('load', () => applyTheme()); // the map's own layers exist only after load
+
+// ==========================================
+// MAP EDITOR: tap to draw missing paths, copy them as GeoJSON for coordinates.geojson
+// ==========================================
+// Existing paths show in grey; new lines in orange. A new line that starts or ends on an
+// existing path (within ~12 m) gets joined to it automatically when the backend builds the graph.
+const EDIT_KEY = 'cp_edit_lines';
+let editing = false, editLines = [[]];
+try { editLines = JSON.parse(localStorage.getItem(EDIT_KEY)) || [[]]; } catch { /* fresh start */ }
+const editBar = document.createElement('div');
+editBar.style.cssText = 'position:fixed;top:12px;left:12px;right:12px;z-index:50;display:none;flex-wrap:wrap;gap:6px;'
+  + 'background:#0f1b2d;color:#fff;padding:10px;border-radius:12px;font:14px system-ui;box-shadow:0 4px 16px #0005';
+editBar.innerHTML = '<span id="edit-info" style="flex:1 1 100%"></span>'
+  + ['New line', 'Undo', 'Copy GeoJSON', 'Clear', 'Done'].map(t =>
+    `<button type="button" style="min-height:40px;padding:0 12px;border:0;border-radius:8px;background:${t === 'Done' ? '#2563eb' : '#1e2a3d'};color:#fff;font:inherit">${t}</button>`).join('');
+document.body.appendChild(editBar);
+
+function editGeoJson() {
+  return { type: 'FeatureCollection', features: editLines.filter(l => l.length > 1).map(l => ({
+    type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: l.map(([x, y]) => [+x.toFixed(6), +y.toFixed(6)]) } })) };
+}
+function drawEdits() {
+  try { localStorage.setItem(EDIT_KEY, JSON.stringify(editLines)); } catch { /* not saved */ }
+  const pts = editLines.flat().map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c } }));
+  map.getSource('edit-lines')?.setData({ type: 'FeatureCollection', features: [...editGeoJson().features, ...pts] });
+  const n = editLines.filter(l => l.length > 1).length;
+  editBar.querySelector('#edit-info').textContent =
+    `Tap along the path. Line ${editLines.length}: ${editLines.at(-1).length} points · ${n} line(s) ready`;
+}
+function addEditPoint(c) { editLines.at(-1).push(c); drawEdits(); }
+function setEditing(on) {
+  editing = on;
+  editBar.style.display = on ? 'flex' : 'none';
+  if (on && !map.getSource('edit-lines')) {
+    map.addSource('edit-existing', { type: 'geojson', data: window.CampusOffline.pathsGeoJson() });
+    map.addLayer({ id: 'edit-existing', type: 'line', source: 'edit-existing', paint: { 'line-color': '#64748b', 'line-width': 3 } });
+    map.addSource('edit-lines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'edit-lines', type: 'line', source: 'edit-lines', paint: { 'line-color': '#f97316', 'line-width': 4 } });
+    map.addLayer({ id: 'edit-pts', type: 'circle', source: 'edit-lines', filter: ['==', '$type', 'Point'],
+      paint: { 'circle-radius': 5, 'circle-color': '#f97316', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+  }
+  ['edit-existing', 'edit-lines', 'edit-pts'].forEach(id => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
+  sheet.style.display = on ? 'none' : ''; // the whole screen is for drawing
+  if (on) { map.flyTo({ center: [73.8681, 18.4637], zoom: 17.5, pitch: 0, bearing: 0 }); drawEdits(); }
+}
+document.getElementById('edit-paths-btn').addEventListener('click', () => setEditing(true));
+editBar.addEventListener('click', async (ev) => {
+  const t = ev.target.textContent;
+  if (t === 'New line') { if (editLines.at(-1).length) editLines.push([]); }
+  else if (t === 'Undo') { if (!editLines.at(-1).length && editLines.length > 1) editLines.pop(); editLines.at(-1).pop(); }
+  else if (t === 'Clear') { if (confirm('Delete all drawn lines?')) editLines = [[]]; }
+  else if (t === 'Done') return setEditing(false);
+  else if (t === 'Copy GeoJSON') {
+    const text = JSON.stringify(editGeoJson());
+    try { await navigator.clipboard.writeText(text); toast('Copied: paste it to Claude'); }
+    catch { prompt('Copy this:', text); }
+  } else return;
+  drawEdits();
+});

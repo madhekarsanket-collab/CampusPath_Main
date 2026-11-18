@@ -35,6 +35,7 @@ public class AStar {
         open.add(new NodeRecord(start, initialHeuristic));
 
         Set<Node> closed = new HashSet<>();
+        boolean outdoorTrip = !start.isIndoor() && !goal.isIndoor();
 
         while (!open.isEmpty()) {
             Node current = open.poll().node;
@@ -52,6 +53,7 @@ public class AStar {
             for (Edge edge : current.getEdges()) {
                 Node neighbor = edge.getTo();
                 if (closed.contains(neighbor)) continue;
+                if (outdoorTrip && neighbor.isIndoor()) continue; // no shortcuts through a building
 
                 double tentativeG = gScore.getOrDefault(current, Double.POSITIVE_INFINITY)
                         + dynamicCost(edge, time, rain, avoidCrowds)

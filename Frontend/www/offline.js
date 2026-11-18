@@ -92,6 +92,7 @@ window.CampusOffline = (() => {
       return top;
     };
 
+    const outdoorTrip = G.nodes[s].floor === null && G.nodes[t].floor === null;
     while (heap.length) {
       const [, cur] = pop();
       if (closed.has(cur)) continue;
@@ -101,6 +102,7 @@ window.CampusOffline = (() => {
       if (G.nodes[cur].virt && cur !== s) continue; // no passing through building nodes
       for (const e of G.nodes[cur].edges) {
         if (closed.has(e.to)) continue;
+        if (outdoorTrip && G.nodes[e.to].floor !== null) continue; // no shortcuts through a building
         let cost = e.d * crowdFactor(e, time, payload.avoidCrowds !== false);
         if (payload.rain && !e.covered) cost += 10000;
         const g = gScore.get(cur) + cost;

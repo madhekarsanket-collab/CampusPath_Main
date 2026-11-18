@@ -181,13 +181,16 @@ public final class AimlIndoorGraph {
 
     private static void linkToOutdoor(Graph g, String entranceId) {
         Node e = g.getNode(entranceId);
+        // Every path point within 15 m, not just the nearest: the nearest can be a dead-end stub
+        // that only reaches the virtual building node (E1 was cut off from the road that way).
         Node best = null;
         double bestD = Double.MAX_VALUE;
-        for (Node n : g.getNodes()) {
+        for (Node n : new java.util.ArrayList<>(g.getNodes())) {
             if (n.isIndoor() || n.isVirtual() || n.getId().startsWith("AIML_E")) continue;
             double d = Haversine.distance(e.getLatitude(), e.getLongitude(), n.getLatitude(), n.getLongitude());
+            if (d < 15) g.addBidirectionalEdge(entranceId, n.getId(), d, false, 1.0);
             if (d < bestD) { bestD = d; best = n; }
         }
-        if (best != null) g.addBidirectionalEdge(entranceId, best.getId(), bestD, false, 1.0);
+        if (best != null && bestD >= 15) g.addBidirectionalEdge(entranceId, best.getId(), bestD, false, 1.0);
     }
 }
