@@ -179,6 +179,7 @@ public class CampusGraphConfig {
             addFallbackIfMissing(graph, "ExitGate", 73.86730, 18.46337);
             addFallbackIfMissing(graph, "Parking", 73.86814, 18.46351);
 
+            joinCrossings(graph);
             AimlIndoorGraph.addTo(graph);
             stitchIslands(graph, 40.0);
             markCrowdHotspots(graph);
@@ -188,6 +189,81 @@ public class CampusGraphConfig {
         } catch (IOException e) {
             throw new IllegalStateException("CRITICAL ERROR: Failed to parse coordinates.geojson", e);
         }
+    }
+
+    /**
+     * Two drawn paths that cross without sharing a point would otherwise not connect
+     * (e.g. the E1 path crossing the road to the canteen). Add a junction node at each crossing,
+     * linked to the four segment ends; the original edges stay.
+     * shortcut: two crossings on one segment aren't linked to each other directly; split segments if that matters.
+     */
+    private void joinCrossings(Graph graph) {
+        java.util.List<Node[]> segs = new java.util.ArrayList<>();
+        java.util.Map<Node[], Boolean> covered = new java.util.HashMap<>();
+        for (Node a : graph.getNodes()) {
+            if (a.isVirtual()) continue;
+            for (com.campuspath.model.Edge e : a.getEdges()) {
+                Node b = e.getTo();
+                if (b.isVirtual() || a.getId().compareTo(b.getId()) >= 0) continue;
+                Node[] s = {a, b};
+                segs.add(s);
+                covered.put(s, e.isCovered());
+            }
+        }
+        int added = 0;
+        for (int i = 0; i < segs.size(); i++) {
+            for (int j = i + 1; j < segs.size(); j++) {
+                Node[] s = segs.get(i), t = segs.get(j);
+                if (s[0] == t[0] || s[0] == t[1] || s[1] == t[0] || s[1] == t[1]) continue;
+                double[] x = intersect(s[0], s[1], t[0], t[1]);
+                if (x == null) continue;
+                String id = String.format(java.util.Locale.ROOT, "X_%.6f_%.6f", x[0], x[1]);
+                Node junction = graph.getNode(id); // duplicate drawn segments meet at the same point
+                if (junction == null) { junction = new Node(id, x[0], x[1]); graph.addNode(junction); }
+                for (Node[] seg : new Node[][]{s, t}) {
+                    for (Node end : seg) {
+                        double d = Haversine.distance(end.getLatitude(), end.getLongitude(), x[1], x[0]);
+                        graph.addBidirectionalEdge(end.getId(), junction.getId(), d, covered.get(seg), 1.0);
+                    }
+                }
+                added++;
+            }
+        }
+        // T-junctions: a path that ends on the middle of another segment (not at one of its points).
+        java.util.List<Node> ends = new java.util.ArrayList<>(graph.getNodes());
+        for (Node p : ends) {
+            if (p.isVirtual() || p.isIndoor()) continue;
+            for (Node[] s : segs) {
+                if (p == s[0] || p == s[1]) continue;
+                double k = Math.cos(Math.toRadians(p.getLatitude())) * 111320, m = 110574;
+                double bx = (s[1].getLongitude() - s[0].getLongitude()) * k, by = (s[1].getLatitude() - s[0].getLatitude()) * m;
+                double px = (p.getLongitude() - s[0].getLongitude()) * k, py = (p.getLatitude() - s[0].getLatitude()) * m;
+                double len2 = bx * bx + by * by;
+                if (len2 == 0) continue;
+                double t = (px * bx + py * by) / len2;
+                if (t <= 0.02 || t >= 0.98 || Math.hypot(px - t * bx, py - t * by) > 3.0) continue;
+                for (Node end : s) {
+                    if (p.getEdges().stream().noneMatch(e -> e.getTo() == end))
+                        graph.addBidirectionalEdge(p.getId(), end.getId(), Haversine.distance(
+                                p.getLatitude(), p.getLongitude(), end.getLatitude(), end.getLongitude()), covered.get(s), 1.0);
+                }
+                added++;
+            }
+        }
+        System.out.println("Joined " + added + " path crossings / T-junctions");
+    }
+
+    /** Interior intersection point [lng, lat] of segments ab and cd, or null. Planar: fine at campus scale. */
+    private static double[] intersect(Node a, Node b, Node c, Node d) {
+        double k = Math.cos(Math.toRadians(a.getLatitude())); // shrink longitude to metres-ish
+        double ax = a.getLongitude() * k, ay = a.getLatitude(), bx = b.getLongitude() * k, by = b.getLatitude();
+        double cx = c.getLongitude() * k, cy = c.getLatitude(), dx = d.getLongitude() * k, dy = d.getLatitude();
+        double den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+        if (Math.abs(den) < 1e-18) return null;
+        double t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
+        double u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
+        if (t <= 0.02 || t >= 0.98 || u <= 0.02 || u >= 0.98) return null; // near an end: the 3 m snap handles it
+        return new double[]{a.getLongitude() + t * (b.getLongitude() - a.getLongitude()), ay + t * (by - ay)};
     }
 
     /**

@@ -838,17 +838,50 @@ navStartBtn.addEventListener('click', () => {
       const pos = [p.coords.longitude, p.coords.latitude];
       pingCrowd(pos);
       if (indoorMode) return; // indoors the step counter drives the position
+      if (offRoute(pos)) return;
       updateUserPosition(pos);
       // Reached the entrance: hand over from GPS to step counting.
       const firstIndoor = route.floors.findIndex(f => f !== null && f !== undefined);
       if (firstIndoor > 0 && progressIdx >= firstIndoor - 1
-          && metersBetween(pos, route.coords[firstIndoor - 1]) < 8) {
+          && metersBetween(pos, route.coords[firstIndoor - 1]) < 15) {
         startPedometer(firstIndoor - 1);
       }
     },
     err => alert('GPS error: ' + err.message),
-    { enableHighAccuracy: true, maximumAge: 2000 });
+    { enableHighAccuracy: true, maximumAge: 0 });
 });
+
+// Walked away from the line (another path)? Plan again from here, like Google Maps.
+const OFF_ROUTE_M = 25;
+let offCount = 0, rerouting = false;
+function offRoute(pos) {
+  if (rerouting) return true;
+  let d = Infinity;
+  for (let i = progressIdx; i < route.coords.length - 1; i++) {
+    if (route.floors[i] != null) break; // only the outdoor part: GPS can't judge indoors
+    d = Math.min(d, distToSegment(pos, route.coords[i], route.coords[i + 1]));
+  }
+  offCount = d > OFF_ROUTE_M ? offCount + 1 : 0;
+  if (offCount < 2) return false; // two fixes in a row: one bad GPS jump shouldn't reroute
+  offCount = 0;
+  rerouting = true;
+  const payload = { ...lastPayload, startNode: undefined, start: { lng: pos[0], lat: pos[1] } };
+  fetch(BACKEND_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .catch(() => window.CampusOffline.route(payload))
+    .then(data => {
+      lastPayload = payload;
+      route = { coords: data.geometry.coordinates,
+        floors: data.properties.floors || data.geometry.coordinates.map(() => null),
+        nodeIds: data.properties.nodeIds || [], props: data.properties };
+      progressIdx = 0;
+      toast('New route from where you are');
+      updateUserPosition(pos);
+    })
+    .catch(() => {})
+    .finally(() => { rerouting = false; });
+  return true;
+}
 
 // Walks the route at SIM_SPEEDUP × walking speed: lets you demo the whole trip on a desktop.
 navSimBtn.addEventListener('click', () => {

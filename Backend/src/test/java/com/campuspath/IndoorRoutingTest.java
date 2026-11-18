@@ -34,6 +34,13 @@ class IndoorRoutingTest {
     }
 
     @Test
+    void room4003ToMainCanteenLeavesByEntrance1ViaThePathCrossing() {
+        var r = service.route("4003", "MainCanteen", false, "1000");
+        assertTrue(r.path().stream().anyMatch(n -> n.getId().equals("AIML_E1")), "E1 is the short way south");
+        assertTrue(r.distanceMeters() < 150, "was 173 m via the north road: " + r.distanceMeters());
+    }
+
+    @Test
     void everyUpperFloorHasTheSameRoomsWithItsOwnNumbers() {
         for (int f = 1; f <= 3; f++) {
             for (String r : new String[]{"01", "02", "03", "04", "04-B", "05", "06", "07", "08", "09"}) {
